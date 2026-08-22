@@ -63,6 +63,41 @@ class OverviewRobot(private val ui: ComposeUi) {
         stateButton(index).assertContentDescriptionEquals(expected)
     }
 
+    /**
+     * Asserts that the two events show the given states in either assignment. Needed when the
+     * platform decides which of two near-simultaneous alarm events gets actioned first: older
+     * Android versions redeliver a second full-screen intent into the already-showing alarm
+     * activity (onNewIntent), while newer versions suppress it, so which event the user acts on
+     * differs by SDK even though the app behavior is identical.
+     */
+    fun assertEventStatesAnyOrder(
+        indexA: Int,
+        indexB: Int,
+        @StringRes stateARes: Int,
+        @StringRes stateBRes: Int
+    ) {
+        scrollToEvent(indexA)
+        scrollToEvent(indexB)
+
+        val expectedA = ui.getString(stateARes)
+        val expectedB = ui.getString(stateBRes)
+        var aMatches = true
+        list.await {
+            val a = stateDescription(indexA)
+            val b = stateDescription(indexB)
+            aMatches = a == expectedA && b == expectedB
+            aMatches || (a == expectedB && b == expectedA)
+        }
+
+        if (aMatches) {
+            stateButton(indexA).assertContentDescriptionEquals(expectedA)
+            stateButton(indexB).assertContentDescriptionEquals(expectedB)
+        } else {
+            stateButton(indexA).assertContentDescriptionEquals(expectedB)
+            stateButton(indexB).assertContentDescriptionEquals(expectedA)
+        }
+    }
+
     fun assertEventTextContains(index: Int, substring: String) {
         list.settle()
         scrollToEvent(index)

@@ -355,8 +355,11 @@ class NotificationTest : MedTimerTestBase() {
         scheduleRemindersNow()
         alarm.take(timeToNotify * 4, "Alarm screen did not appear a second time")
 
-        overview.assertEventState(2, R.string.taken)
-        overview.assertEventState(3, R.string.reminded)
+        // The second scheduleNow fires another full-screen intent while the alarm screen is up.
+        // Older platforms (API 28) redeliver it into the showing activity via onNewIntent so the
+        // screen switches to the newest alarm (the #1494 fix); newer platforms suppress it. Which
+        // event the tap acts on therefore depends on the SDK, so assert the invariant instead.
+        overview.assertEventStatesAnyOrder(2, 3, R.string.taken, R.string.reminded)
     }
 
     @Test
