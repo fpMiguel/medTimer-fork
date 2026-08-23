@@ -60,31 +60,36 @@ class AlarmFragment(
         val view = inflater.inflate(R.layout.fragment_alarm, container, false)
 
         lifecycleScope.launch {
-            withContext(ioCoroutineDispatcher) {
-                val reminderNotification = reminderNotificationFactory.create(
-                    reminderNotificationData
-                )!!
-                Log.d(ALARM, "Creating fragment for raised notification $reminderNotification")
-
-                val notificationStrings = NotificationStringBuilder(
-                    requireContext(),
-                    preferencesDataSource,
-                    timeFormatter,
-                    reminderNotification,
-                    false
-                )
-                val intents = notificationIntentBuilderFactory.create(reminderNotification)
-
+            val reminderNotification = withContext(ioCoroutineDispatcher) {
+                reminderNotificationFactory.create(reminderNotificationData)
+            }
+            if (reminderNotification == null) {
+                Log.e(ALARM, "Degenerate notification data: factory produced no notification, finishing alarm activity")
                 withContext(mainDispatcher) {
-                    setupTexts(
-                        view,
-                        notificationStrings,
-                        reminderNotification.reminderNotificationParts.any { it.medicine.isOutOfStock() })
-                    setupButtons(
-                        view,
-                        intents
-                    )
+                    requireActivity().finishAndRemoveTask()
                 }
+                return@launch
+            }
+            Log.d(ALARM, "Creating fragment for raised notification $reminderNotification")
+
+            val notificationStrings = NotificationStringBuilder(
+                requireContext(),
+                preferencesDataSource,
+                timeFormatter,
+                reminderNotification,
+                false
+            )
+            val intents = notificationIntentBuilderFactory.create(reminderNotification)
+
+            withContext(mainDispatcher) {
+                setupTexts(
+                    view,
+                    notificationStrings,
+                    reminderNotification.reminderNotificationParts.any { it.medicine.isOutOfStock() })
+                setupButtons(
+                    view,
+                    intents
+                )
             }
         }
 
