@@ -22,7 +22,8 @@ class Notifications @Inject constructor(
     private val outOfStockNotificationFactory: OutOfStockNotificationFactory.Factory,
     private val expirationDateNotificationFactory: ExpirationDateNotificationFactory.Factory,
     private val preferencesDataSource: PreferencesDataSource,
-    private val persistentDataDataSource: PersistentDataDataSource
+    private val persistentDataDataSource: PersistentDataDataSource,
+    private val alarmScreenRepository: AlarmScreenRepository
 ) {
     fun showNotification(reminderNotification: ReminderNotification, notificationId: Int = -1): Int {
         var notificationId = notificationId
@@ -38,6 +39,11 @@ class Notifications @Inject constructor(
             else -> simpleReminderNotificationFactory.create(reminderNotification)
         }
 
+        if (reminderNotification.reminderNotificationData.showAsAlarm) {
+            // Swap must happen synchronously BEFORE the post so the holder is always ahead
+            // of any SystemUI full-screen-intent launch resolution.
+            alarmScreenRepository.swap(reminderNotification.reminderNotificationData)
+        }
         notify(notificationId, factory.create())
         Log.d(LogTags.REMINDER, String.format("Show notification nID %d: %s", notificationId, reminderNotification))
 
