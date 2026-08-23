@@ -70,6 +70,7 @@ abstract class ReminderNotificationFactory(
 
     @SuppressLint("FullScreenIntentPolicy")
     private fun addFullScreenIntent() {
+        reminderNotification.reminderNotificationData.showAsAlarm = true
         val pendingIntent = PendingIntent.getActivity(
             context,
             0,

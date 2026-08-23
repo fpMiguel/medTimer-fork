@@ -10,6 +10,7 @@ fun ReminderNotificationData.writeTo(intent: Intent) {
     intent.putExtra(ActivityCodes.EXTRA_REMINDER_EVENT_ID_LIST, reminderEventIds.toIntArray())
     intent.putExtra(ActivityCodes.EXTRA_REMIND_INSTANT, remindInstant.epochSecond)
     intent.putExtra(ActivityCodes.EXTRA_NOTIFICATION_ID, notificationId)
+    intent.putExtra(ActivityCodes.EXTRA_SHOW_AS_ALARM, showAsAlarm)
 }
 
 fun ReminderNotificationData.writeTo(bundle: Bundle) {
@@ -17,6 +18,7 @@ fun ReminderNotificationData.writeTo(bundle: Bundle) {
     bundle.putIntArray(ActivityCodes.EXTRA_REMINDER_EVENT_ID_LIST, reminderEventIds.toIntArray())
     bundle.putLong(ActivityCodes.EXTRA_REMIND_INSTANT, remindInstant.epochSecond)
     bundle.putInt(ActivityCodes.EXTRA_NOTIFICATION_ID, notificationId)
+    bundle.putBoolean(ActivityCodes.EXTRA_SHOW_AS_ALARM, showAsAlarm)
 }
 
 fun Bundle.toReminderNotificationData(): ReminderNotificationData {
@@ -24,7 +26,8 @@ fun Bundle.toReminderNotificationData(): ReminderNotificationData {
     val reminderEventIds = reminderEventIdsFromBundle(this)
     val remindInstant = Instant.ofEpochSecond(getLong(ActivityCodes.EXTRA_REMIND_INSTANT))
     val notificationId = getInt(ActivityCodes.EXTRA_NOTIFICATION_ID, -1)
-    return ReminderNotificationData(remindInstant, reminderIds, reminderEventIds, notificationId)
+    val showAsAlarm = getBoolean(ActivityCodes.EXTRA_SHOW_AS_ALARM, false)
+    return ReminderNotificationData(remindInstant, reminderIds, reminderEventIds, notificationId, showAsAlarm)
 }
 
 fun reminderIdsFromBundle(bundle: Bundle): List<Int> =

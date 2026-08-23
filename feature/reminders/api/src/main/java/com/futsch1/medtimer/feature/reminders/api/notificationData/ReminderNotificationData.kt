@@ -8,7 +8,8 @@ class ReminderNotificationData(
     var remindInstant: Instant,
     var reminderIds: List<Int> = listOf(),
     var reminderEventIds: List<Int> = listOf(),
-    var notificationId: Int = -1
+    var notificationId: Int = -1,
+    var showAsAlarm: Boolean = false
 ) {
     var valid: Boolean = reminderIds.isNotEmpty()
 
