@@ -60,8 +60,21 @@ class AlarmFragment(
         val view = inflater.inflate(R.layout.fragment_alarm, container, false)
 
         lifecycleScope.launch {
-            val reminderNotification = withContext(ioCoroutineDispatcher) {
-                reminderNotificationFactory.create(reminderNotificationData)
+            val (reminderNotification, notificationStrings, intents) = withContext(ioCoroutineDispatcher) {
+                val notification = reminderNotificationFactory.create(reminderNotificationData)
+                if (notification == null) {
+                    null
+                } else {
+                    val strings = NotificationStringBuilder(
+                        requireContext(),
+                        preferencesDataSource,
+                        timeFormatter,
+                        notification,
+                        false
+                    )
+                    val intents = notificationIntentBuilderFactory.create(notification)
+                    Triple(notification, strings, intents)
+                }
             }
             if (reminderNotification == null) {
                 Log.e(ALARM, "Degenerate notification data: factory produced no notification, finishing alarm activity")
@@ -71,15 +84,6 @@ class AlarmFragment(
                 return@launch
             }
             Log.d(ALARM, "Creating fragment for raised notification $reminderNotification")
-
-            val notificationStrings = NotificationStringBuilder(
-                requireContext(),
-                preferencesDataSource,
-                timeFormatter,
-                reminderNotification,
-                false
-            )
-            val intents = notificationIntentBuilderFactory.create(reminderNotification)
 
             withContext(mainDispatcher) {
                 setupTexts(
