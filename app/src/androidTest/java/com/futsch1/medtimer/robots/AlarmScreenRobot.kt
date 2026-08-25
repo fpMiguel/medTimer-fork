@@ -1,6 +1,7 @@
 package com.futsch1.medtimer.robots
 
 import android.app.Activity
+import android.content.Intent
 import android.util.Log
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
@@ -41,6 +42,17 @@ class AlarmScreenRobot {
      */
     fun awaitShows(text: String, timeoutMillis: Long, message: String) {
         assertTrue(pollUntil(timeoutMillis) { displays(text) }, "$message (never displayed \"$text\")")
+    }
+
+    /**
+     * Bounded wait for the alarm screen to have REPLACED content containing [text] while staying
+     * up - e.g. a taken dose's line gone after an equal-ID reduced-payload re-post.
+     */
+    fun awaitHides(text: String, timeoutMillis: Long, message: String) {
+        assertTrue(
+            pollUntil(timeoutMillis) { alarmActivity() != null && !displays(text) },
+            "$message (\"$text\" still displayed)"
+        )
     }
 
     /**
@@ -138,6 +150,35 @@ class AlarmScreenRobot {
             .joinToString(" || ")
     }.getOrDefault("unavailable")
 
+    /**
+     * Brings the alarm task back to the front via `am start` on the singleInstance alarm
+     * activity (the shell equivalent of tapping its recents entry, for states where
+     * `am stack move-task` executes but does not focus the task). The extras-less intent hits
+     * [ReminderAlarmActivity.onNewIntent], which reconciles from the holder and whose bootstrap
+     * fallback correctly ignores an intent without a notification id - so what is displayed is
+     * purely the holder's current payload.
+     */
+    fun resumeAlarmTaskViaAmStart(timeoutMillis: Long, message: String) {
+        val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
+        // Started from the app's OWN context: the activity is not exported, so a shell `am start`
+        // (uid 2000) is denied. An extras-less intent hits [ReminderAlarmActivity.onNewIntent],
+        // which reconciles from the holder and whose bootstrap fallback ignores an intent
+        // without a notification id - so what is displayed is purely the holder's payload.
+        assertTrue(
+            pollUntil(timeoutMillis) {
+                runCatching {
+                    targetContext.startActivity(
+                        Intent(targetContext, ReminderAlarmActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    )
+                }
+                alarmActivity() != null
+            },
+            message
+        )
+        logHygiene("resumed-via-am-start")
+    }
+
     /** Taps Taken until the alarm closes: it can resume after the first tap lands. */
     fun take(timeoutMillis: Long, message: String) {
         awaitShown(timeoutMillis, message)
@@ -153,6 +194,28 @@ class AlarmScreenRobot {
         val activity = alarmActivity() ?: return
         try {
             onView(withId(com.futsch1.medtimer.feature.reminders.R.id.takenButton))
+                .inRoot(RootMatchers.withDecorView(`is`(activity.window.decorView)))
+                .perform(click())
+        } catch (e: Throwable) {
+            lastClickError = e
+        }
+    }
+
+    /** Presses Snooze until the alarm closes, mirroring [take]. */
+    fun snooze(timeoutMillis: Long, message: String) {
+        awaitShown(timeoutMillis, message)
+        lastClickError = null
+        val closed = pollUntil(CLOSE_TIMEOUT) {
+            clickSnooze()
+            alarmActivity() == null
+        }
+        assertTrue(closed, "Alarm screen did not close on snooze" + (lastClickError?.let { ": $it" } ?: ""))
+    }
+
+    private fun clickSnooze() {
+        val activity = alarmActivity() ?: return
+        try {
+            onView(withId(com.futsch1.medtimer.feature.reminders.R.id.snoozeButton))
                 .inRoot(RootMatchers.withDecorView(`is`(activity.window.decorView)))
                 .perform(click())
         } catch (e: Throwable) {
