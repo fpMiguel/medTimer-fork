@@ -99,6 +99,12 @@ class ReminderAlarmActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Reconciliation at resume time: a swap committed while the activity was STOPPED
+        // (collector or onNewIntent under a covering screen) may not have rendered yet, and
+        // the displayedAlarm dedupe would then keep skipping it as "already displayed".
+        // Re-syncing here makes any such pending swap visible as soon as the user sees the
+        // screen. The holder flow collector above remains the live trigger.
+        reconcileFromHolder()
         lifecycleScope.launch(alarmExecutor) {
             startAlarm()
         }
@@ -220,8 +226,14 @@ class ReminderAlarmActivity : AppCompatActivity() {
     private fun addAlarmFragment(data: ReminderNotificationData) {
         Log.d(LogTags.ALARM, "Adding alarm fragment")
         displayedAlarm = data
+        // commitAllowingStateLoss instead of commit(): display paths can run while the
+        // activity is stopped (holder collector / onNewIntent under a covering dialog or
+        // the shade), where a plain commit() throws IllegalStateException checkStateLoss.
+        // Fragment state loss here is acceptable - every display path re-syncs from the
+        // holder, so no saved transaction state is ever needed.
         supportFragmentManager.beginTransaction()
-            .replace(R.id.alarmFragmentContainer, AlarmFragment::class.java, buildArguments(data)).commit()
+            .replace(R.id.alarmFragmentContainer, AlarmFragment::class.java, buildArguments(data))
+            .commitAllowingStateLoss()
     }
 
     /**
