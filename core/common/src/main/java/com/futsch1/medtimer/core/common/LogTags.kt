@@ -7,6 +7,7 @@ object LogTags {
     const val STOCK_HANDLING = "StockHandlingDebug"
     const val ALARM = "AlarmDebug"
     const val AUTOSTART = "AutostartDebug"
+    const val WIDGET = "WidgetDebug"
     const val MAIN = "MedTimerMain"
     const val BIOMETRICS = "Biometrics"
     const val LOCATION = "Location"
