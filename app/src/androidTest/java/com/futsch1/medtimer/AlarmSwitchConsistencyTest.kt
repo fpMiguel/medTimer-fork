@@ -11,24 +11,8 @@ private const val FIRST_ALARM_MEDICINE = "Soon med"
 private const val SECOND_ALARM_MEDICINE = "Later med"
 
 /**
- * Regression test for issue #1494: a second alarm posted through the REAL production pipeline
- * while [com.futsch1.medtimer.feature.reminders.alarm.ReminderAlarmActivity] is foregrounded and
- * RESUMED must switch the displayed alarm to the newest dose - never stick to the previous event.
- *
- * Two interval reminders with equal intervals are created back to back, so each chain's next
- * occurrence is anchored at its own creation time + 3 minutes: the first-created chain is always
- * the earlier pending alarm (fire 1), and after fire 1 advances its own chain, the second-created
- * chain's pending occurrence is always the earlier one (fire 2) - its anchor trails fire 1's
- * shifted remind time. The two medicines give the otherwise identical alarm screen
- * distinguishable titles.
- *
- * Everything runs through the production path: real scheduler, real notification posts with
- * full-screen intents into the sleeping device, real holder swap at the Notifications.notify()
- * choke point. Both fires go through scheduleRemindersNow() with zero debug delay, which makes
- * the app's own recalc show the earliest pending occurrence immediately - inline, so no
- * debug-shifted alarm exists that a background reschedule could overwrite. No pipeline mocking,
- * no fixed sleeps (all waits go through robot await mechanisms), no delivery-order assertions.
- * No retry annotation - test must be deterministic; F-wave will include repeated runs to confirm.
+ * Why: Second alarm while RESUMED must switch to newest dose (regression #1494).
+ * How: Two 3-min interval chains back-to-back; fires via production scheduler + holder choke-point; zero debug delay inline recalc; robot awaits, no mocks/sleeps/retries.
  */
 @HiltAndroidTest
 class AlarmSwitchConsistencyTest : MedTimerTestBase() {

@@ -20,23 +20,8 @@ private const val TAKEN_MEDICINE = "Taken med"
 private const val REMAINING_MEDICINE = "Remaining med"
 
 /**
- * Edge cases of the alarm-screen-consistency mechanism (companion to [AlarmSwitchConsistencyTest]):
- *
- * B1 - HIJACK GUARD: posts that never get stamped (showAsAlarm=false) must never touch the
- *      app-wide alarm holder, so they cannot hijack a displayed alarm.
- * B2 - EQUAL-ID REDUCED PAYLOAD: after taking ONE dose of a multi-dose alarm via its notification
- *      action, the app re-posts the SAME notification id with a REDUCED reminderEventIds payload;
- *      the displayed alarm must REPLACE its content (dedupe equality is id + event ids, so the
- *      reduced payload differs and must win), not be suppressed as "already shown".
- *
- * B3 snooze wall-clock path removed: it required a real 60s wait through doze/exact-alarm and was
- * inherently flaky on API 28 (see todo10b). Snooze is now covered by deterministic JVM unit tests
- * for the scheduling logic plus manual QA; this file keeps the two deterministic instrumented guards.
- *
- * Everything runs through the production pipeline (real scheduler, real notification posts, real
- * holder swap at Notifications.notify()), following the AlarmSwitchConsistencyTest pattern: real
- * full-screen launches into the sleeping device via scheduleRemindersNow(), robot awaits instead
- * of sleeps, no pipeline mocking, no retry annotations.
+ * Why: Guard B1 hijack (unstamped posts must not touch holder) and B2 equal-ID reduced payload replaces display (dedupe is id+eventIds).
+ * How: Production pipeline + holder choke-point, real FSI via scheduleRemindersNow(), robot awaits, no mocks/sleeps/retry; B3 snooze covered by JVM tests.
  */
 @HiltAndroidTest
 class EdgeCaseAlarmTest : MedTimerTestBase() {

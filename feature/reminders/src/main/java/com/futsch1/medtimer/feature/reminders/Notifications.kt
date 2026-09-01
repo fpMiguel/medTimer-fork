@@ -40,8 +40,8 @@ class Notifications @Inject constructor(
         }
 
         if (reminderNotification.reminderNotificationData.showAsAlarm) {
-            // Swap must happen synchronously BEFORE the post so the holder is always ahead
-            // of any SystemUI full-screen-intent launch resolution.
+            // Why: Holder must be ahead of SystemUI FSI resolution.
+            // How: Swap synchronously before notify().
             alarmScreenRepository.swap(reminderNotification.reminderNotificationData)
         }
         notify(notificationId, factory.create())

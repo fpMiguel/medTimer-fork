@@ -55,8 +55,8 @@ class AlarmScreenRobot {
     }
 
     /**
-     * Asserts the RESUMED activity IS [ReminderAlarmActivity] by component class - MainActivity
-     * is also singleInstance, so only the explicit class check disambiguates what is under test.
+     * Why: MainActivity is also singleInstance, so RESUMED top must be explicitly validated.
+     * How: Assert component className == ReminderAlarmActivity; log resumed component.
      */
     fun assertResumedTopActivityIsAlarmScreen(message: String) {
         val activity = alarmActivity()
