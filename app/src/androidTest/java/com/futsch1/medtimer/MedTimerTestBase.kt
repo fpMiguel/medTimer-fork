@@ -155,6 +155,22 @@ abstract class MedTimerTestBase {
 
     protected fun getString(@StringRes textRes: Int): String = robots.getString(textRes)
 
+    /** The test harness for this test class. */
+    protected val testHarness: MedTimerTestHarness = harness
+
+    /**
+     * Prepares the device for a sleeping-device test by disabling doze, whitelisting the app,
+     * granting exact-alarm permission via appops, and performing wake hygiene.
+     * Called before tests that require the device to be asleep and then wake via FSI.
+     */
+    protected fun prepareSleepingDeviceTest() = harness.prepareSleepingDeviceTest()
+
+    /**
+     * Wake the device and wait a moment for it to stabilize.
+     * Used by tests that need the device to be awake before proceeding.
+     */
+    protected fun wakeDeviceAndStabilize() = harness.wakeDeviceAndStabilize()
+
     companion object {
         /** The reminder is created some way into the test, so the interval must clear midnight by more than 0. */
         private val INTERVAL_MIDNIGHT_MARGIN = 1.minutes
