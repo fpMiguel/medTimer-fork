@@ -99,11 +99,8 @@ class ReminderAlarmActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Reconciliation at resume time: a swap committed while the activity was STOPPED
-        // (collector or onNewIntent under a covering screen) may not have rendered yet, and
-        // the displayedAlarm dedupe would then keep skipping it as "already displayed".
-        // Re-syncing here makes any such pending swap visible as soon as the user sees the
-        // screen. The holder flow collector above remains the live trigger.
+        // Why: Reconcile pending holder swaps that weren't visible while stopped.
+        // How: Call reconcileFromHolder to sync displayed alarm from holder.
         reconcileFromHolder()
         lifecycleScope.launch(alarmExecutor) {
             startAlarm()
@@ -171,7 +168,7 @@ class ReminderAlarmActivity : AppCompatActivity() {
                 mediaPlayer?.pause()
             }
         } catch (_: IllegalStateException) {
-            // Ignore
+            // MediaPlayer was not initialized or already released; pauseAlarm() is best-effort — safe to ignore
         }
 
         vibrator.cancel()
@@ -208,10 +205,8 @@ class ReminderAlarmActivity : AppCompatActivity() {
     }
 
     /**
-     * Displays the alarm carried by an [Intent]. This is the cold-start/recreation entry point
-     * and the bootstrap fallback of [onNewIntent] - never the primary data source while the
-     * holder is current. Parses the intent payload and routes it through the shared
-     * fragment-replace path so the dedupe bookkeeping stays in one place.
+     * Why: Cold-start/recreation fallback and onNewIntent bootstrap when holder stale.
+     * How: Parse intent extras and funnel through shared fragment replace with dedupe bookkeeping.
      */
     private fun addAlarmFragment(intent: Intent?) {
         val extras = intent?.extras ?: return
@@ -219,9 +214,8 @@ class ReminderAlarmActivity : AppCompatActivity() {
     }
 
     /**
-     * Replaces the displayed alarm fragment with the given data. Single funnel for every
-     * display path (cold-start intent, onNewIntent bootstrap fallback, holder reconciliation);
-     * records the shown alarm for holder-emission dedupe.
+     * Why: Single funnel for all display paths to keep dedupe consistent.
+     * How: Replace fragment, record displayedAlarm; uses commitAllowingStateLoss (stopped paths).
      */
     private fun addAlarmFragment(data: ReminderNotificationData) {
         Log.d(LogTags.ALARM, "Adding alarm fragment")
@@ -230,17 +224,15 @@ class ReminderAlarmActivity : AppCompatActivity() {
         // activity is stopped (holder collector / onNewIntent under a covering dialog or
         // the shade), where a plain commit() throws IllegalStateException checkStateLoss.
         // Fragment state loss here is acceptable - every display path re-syncs from the
-        // holder, so no saved transaction state is ever needed.
+        // holder re-sync only when holder != null (cold-start fallback is intent, not holder), so no saved transaction state is ever needed.
         supportFragmentManager.beginTransaction()
             .replace(R.id.alarmFragmentContainer, AlarmFragment::class.java, buildArguments(data))
             .commitAllowingStateLoss()
     }
 
     /**
-     * Hand-rolled dedupe equality: [ReminderNotificationData] is deliberately not a data class
-     * and full-field comparison is deliberately avoided - two payloads count as "the same alarm
-     * on screen" when their notification ID matches and their reminder event IDs match
-     * order-sensitively.
+     * Why: Dedupe holder emissions vs displayed alarm without redundant replaces.
+     * How: Compare notificationId + order-sensitive reminderEventIds; not a data class, no full-field compare.
      */
     private fun isCurrentlyDisplayed(candidate: ReminderNotificationData): Boolean {
         val displayed = displayedAlarm ?: return false
@@ -249,23 +241,8 @@ class ReminderAlarmActivity : AppCompatActivity() {
     }
 
     /**
-     * The alarm activity is launched with FLAG_ACTIVITY_SINGLE_TOP, so a second alarm arriving
-     * while it is already on top is delivered here instead of recreating the activity.
-     * Without reconciliation the new alarm's events would be dropped and the screen would keep
-     * showing the previous alarm (see issue #1494).
-     *
-     * onNewIntent is a TRIGGER plus BOOTSTRAP-FALLBACK - never the primary data source:
-     *
-     * 1. Reconcile from the holder first. [AlarmScreenRepository.currentAlarm] receives its value
-     *    synchronously at the Notifications.notify() choke point BEFORE the post, so it is always
-     *    at least as recent as anything the system can deliver via an intent.
-     *
-     * 2. Fall back to the delivered intent ONLY when the holder cannot satisfy the monotonic
-     *    rule (null holder value, or a holder older than the intent's payload - the same
-     *    >= notificationId rule applied to the intent's extras ID). This keeps synthetic
-     *    redelivery working (e.g. AlarmIntentRedeliveryTest crafts intents directly that never
-     *    pass through the choke point). Intent data is read exclusively inside this guarded
-     *    branch; outside of it only the notification ID extra is consulted to evaluate the rule.
+     * Why: SINGLE_TOP delivers second alarm without recreation; must not drop events (issue #1494).
+     * How: Trigger reconcileFromHolder first (holder swapped before notify, always ahead); fallback to intent only if holder null/older (same >= id rule, supports synthetic AlarmIntentRedeliveryTest).
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -289,8 +266,8 @@ class ReminderAlarmActivity : AppCompatActivity() {
     }
 
     /**
-     * Synchronous variant of the flow collector body: null holder value is a no-op, an alarm
-     * already displayed is skipped, anything else replaces the displayed fragment.
+     * Why: Sync trigger for onResume/onNewIntent when collector not visible.
+     * How: Skip null or already-displayed; else replace fragment.
      */
     private fun reconcileFromHolder() {
         val candidate = alarmScreenRepository.currentAlarm.value ?: return
@@ -302,9 +279,8 @@ class ReminderAlarmActivity : AppCompatActivity() {
 
     companion object {
         /**
-         * Shared builder for alarm fragment arguments, used by BOTH the intent path
-         * ([getIntent]) and the holder-driven replacement path so both payloads stay
-         * symmetric through the same serialization.
+         * Why: Keep intent and holder paths symmetric.
+         * How: Shared builder via writeTo for both getIntent and holder replace.
          */
         fun buildArguments(reminderNotificationData: ReminderNotificationData): Bundle =
             Bundle().apply { reminderNotificationData.writeTo(this) }

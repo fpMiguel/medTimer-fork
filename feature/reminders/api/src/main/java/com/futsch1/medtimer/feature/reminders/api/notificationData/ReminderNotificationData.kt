@@ -14,7 +14,7 @@ class ReminderNotificationData(
     var valid: Boolean = reminderIds.isNotEmpty()
 
     init {
-        // The class can be either initialized via the reminder IDs or via the notification reminder events
+        // Valid iff both lists non-empty and sizes match: reminderIds non-empty and reminderIds.size == reminderEventIds.size; else valid=false
         if (reminderIds.isEmpty()) {
             valid = false
         }
