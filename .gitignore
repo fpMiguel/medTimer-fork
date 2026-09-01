@@ -50,6 +50,3 @@ gradle/gradle-daemon-jvm.properties
 CLAUDE.md
 .claude
 .mcp.json
-
-# OmO local config
-omo.jsonc
