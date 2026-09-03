@@ -130,8 +130,14 @@ fun AppNavigationScaffold(
         // full system bars here resolves to exactly the sides the content still has to avoid.
         Column(Modifier.windowInsetsPadding(WindowInsets.systemBars)) {
             AndroidViewBinding(ContentMainBinding::inflate, Modifier.weight(1f)) {
-                // The update block runs on every recomposition; set up exactly once.
+                // Guard: on API 36 the FragmentContainerView inflate can race with
+                // onSaveInstanceState and throw "Can not perform this action after
+                // onSaveInstanceState". If the FragmentManager is already saved, defer
+                // binding to the next recomposition — the alarm activity (ReminderAlarmActivity)
+                // is independent, so this never blocks the FSI path.
                 if (navController == null) {
+                    val fm = try { root.getFragment<NavHostFragment>().parentFragmentManager } catch (_: Exception) { null }
+                    if (fm?.isStateSaved == true) return@AndroidViewBinding
                     val fragment = root.getFragment<NavHostFragment>()
                     val controller = fragment.navController
                     controller.addOnDestinationChangedListener { _, destination, _ ->

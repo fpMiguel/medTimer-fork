@@ -19,33 +19,34 @@ class AlarmSwitchConsistencyTest : MedTimerTestBase() {
 
     @Test
     fun foregroundAlarmScreenSwitchesToNewestDose() {
-        val timeToNotify = 10_000L
+        val timeToNotify = 5_000L
         alarm.wakeDevice()
 
-        medicines.create(FIRST_ALARM_MEDICINE)
-        medicineEditor.addIntervalReminder("1", 3.minutes)
-        medicineSettings.inSettings { setNotificationImportance(R.string.high_and_alarm) }
-
-        navigation.toMedicines()
-        medicines.create(SECOND_ALARM_MEDICINE)
-        medicineEditor.addIntervalReminder("1", 3.minutes)
-        medicineSettings.inSettings { setNotificationImportance(R.string.high_and_alarm) }
+        // Use Seed for direct repository seeding - avoids UI robot overhead (~15s per medicine)
+        val firstId = seed.medicine(FIRST_ALARM_MEDICINE) {
+            intervalReminder("1", 3.minutes)
+            // High importance = high_and_alarm (cannotBeSkipped maps to this)
+            cannotBeSkipped()
+        }
+        val secondId = seed.medicine(SECOND_ALARM_MEDICINE) {
+            intervalReminder("1", 3.minutes)
+            cannotBeSkipped()
+        }
 
         // Fire 1 via the production path: the first-created chain's next occurrence is the
         // earliest pending alarm; the zero-delay schedule makes the app's own recalc show it
         // immediately (inline - nothing for a background reschedule to overwrite). The device
-        // is already asleep, so the full-screen intent launches over keyguard. awaitNextSecond
-        // lets the keyguard settle and separates the two fires' remind seconds.
+        // is already asleep, so the full-screen intent launches over keyguard.
         alarm.sleepDevice()
         awaitNextSecond()
         scheduleRemindersNow()
 
-        alarm.awaitShown(timeToNotify * 4, "First alarm screen did not appear")
+        alarm.awaitShown(timeToNotify * 2, "First alarm screen did not appear")
         alarm.logHygiene("first-alarm-shown")
         alarm.assertResumedTopActivityIsAlarmScreen(
             "First alarm must be shown by ReminderAlarmActivity itself"
         )
-        alarm.awaitShows(FIRST_ALARM_MEDICINE, timeToNotify * 2, "First alarm shows wrong content")
+        alarm.awaitShows(FIRST_ALARM_MEDICINE, timeToNotify, "First alarm shows wrong content")
 
         // Fire 2 through the production path while the screen is foregrounded+RESUMED: no
         // lifecycle trigger delivers it - the second-created chain's pending occurrence fires
@@ -53,7 +54,7 @@ class AlarmSwitchConsistencyTest : MedTimerTestBase() {
         awaitNextSecond()
         scheduleRemindersNow()
 
-        alarm.awaitShows(SECOND_ALARM_MEDICINE, SWITCH_TIMEOUT, "Display did not switch to second dose")
+        alarm.awaitShows(SECOND_ALARM_MEDICINE, SWITCH_TIMEOUT / 2, "Display did not switch to second dose")
         alarm.logHygiene("switched-to-second-dose")
         alarm.assertResumedTopActivityIsAlarmScreen(
             "Switched display must still live in ReminderAlarmActivity"
@@ -63,10 +64,11 @@ class AlarmSwitchConsistencyTest : MedTimerTestBase() {
         // into a subsequent run (a leftover screen would poison the next attempt's assertions).
         // Home/Recents retention of the stopped-but-alive screen is verified in F3's manual pass
         // (plan gate G2 default: stopped-but-alive automation deferred).
-        alarm.take(20_000, "Switched alarm screen did not offer Taken")
+        alarm.take(SWITCH_TIMEOUT / 2, "Switched alarm screen did not offer Taken")
     }
 
     private companion object {
-        const val SWITCH_TIMEOUT = 20_000L
+        const val SWITCH_TIMEOUT = 10_000L
+        const val timeToNotify = 5_000L
     }
 }

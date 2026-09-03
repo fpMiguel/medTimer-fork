@@ -14,14 +14,15 @@ import com.futsch1.medtimer.feature.reminders.api.notificationData.ReminderNotif
 import com.futsch1.medtimer.feature.reminders.notificationData.toPendingIntent
 import com.futsch1.medtimer.feature.reminders.api.notificationData.writeTo
 import com.futsch1.medtimer.feature.reminders.widgets.WidgetUpdateReceiver
+import androidx.annotation.VisibleForTesting
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
 import javax.inject.Inject
 
-class AlarmProcessor @Inject constructor(
+open class AlarmProcessor @Inject constructor(
     @param:ApplicationContext
-    private val context: Context,
-    private val alarmManager: AlarmManager,
+    protected val context: Context,
+    protected val alarmManager: AlarmManager,
     private val timeAccess: TimeAccess,
     preferencesDataSource: PreferencesDataSource
 ) {
@@ -89,7 +90,8 @@ class AlarmProcessor @Inject constructor(
         return true
     }
 
-    private fun scheduleAlarm(instant: Instant, pendingIntent: PendingIntent) {
+    @VisibleForTesting
+    protected open fun scheduleAlarm(instant: Instant, pendingIntent: PendingIntent) {
         if (canScheduleExactAlarms()) {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, instant.toEpochMilli(), pendingIntent)
         } else {

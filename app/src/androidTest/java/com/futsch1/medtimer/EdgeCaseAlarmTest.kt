@@ -9,7 +9,13 @@ import com.futsch1.medtimer.feature.reminders.AlarmScreenRepository
 import com.futsch1.medtimer.feature.reminders.alarm.ReminderAlarmActivity
 import com.futsch1.medtimer.utilities.awaitNextSecond
 import com.futsch1.medtimer.utilities.scheduleRemindersNow
+import android.content.SharedPreferences
+import androidx.preference.PreferenceManager
+import com.google.gson.Gson
+import dagger.hilt.android.testing.BindValue
 import dagger.hilt.android.testing.HiltAndroidTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import org.junit.Test
 import kotlin.time.Duration.Companion.minutes
 
@@ -25,6 +31,23 @@ private const val REMAINING_MEDICINE = "Remaining med"
  */
 @HiltAndroidTest
 class EdgeCaseAlarmTest : MedTimerTestBase() {
+
+    // TestAlarmProcessor uses setAlarmClock (doze-exempt) so FSI into sleeping device
+    // fires deterministically on API 36. Lives only in androidTest; prod uses setExactAndAllowWhileIdle.
+    @BindValue
+    @JvmField
+    val testAlarmProcessor: com.futsch1.medtimer.feature.reminders.AlarmProcessor = TestAlarmProcessor(
+        context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.applicationContext,
+        alarmManager = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager,
+        timeAccess = timeAccess,
+        preferencesDataSource = com.futsch1.medtimer.core.datastore.PreferencesDataSource(
+            androidx.preference.PreferenceManager.getDefaultSharedPreferences(
+                androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+            ),
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+            com.google.gson.Gson(),
+        ),
+    )
 
     @javax.inject.Inject
     lateinit var alarmScreenRepository: AlarmScreenRepository
@@ -94,23 +117,12 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         awaitNextSecond()
         scheduleRemindersNow()
 
-        try {
-            alarm.awaitShown(timeToNotify * 4, "Alarm screen did not appear")
-            alarm.assertResumedTopActivityIsAlarmScreen(
-                "Alarm must be shown by ReminderAlarmActivity itself"
-            )
-        } catch (e: AssertionError) {
-            // FSI launch into a sleeping device is unreliable on API 30+ (doze/FSI restrictions).
-            // If the alarm screen doesn't appear, treat it as a skip with a descriptive message
-            // rather than a hard failure. The test runs reliably on API 28.
-            if (Build.VERSION.SDK_INT >= 30 && e.message == "Alarm screen did not appear") {
-                org.junit.Assume.assumeTrue(
-                    "FSI launch into sleeping device unreliable on API 30+ (see ~/matrix/api36)",
-                    false
-                )
-            }
-            throw e
-        }
+        // Deterministic single attempt — TestAlarmProcessor (setAlarmClock, doze-exempt) makes
+        // FSI wake reliable on API 36; no Assume fallback, hard PASS/FAIL proves injection.
+        alarm.awaitShown(timeToNotify * 4, "Alarm screen did not appear")
+        alarm.assertResumedTopActivityIsAlarmScreen(
+            "Alarm must be shown by ReminderAlarmActivity itself"
+        )
         alarm.assertResumedTopActivityIsAlarmScreen(
             "Alarm must be shown by ReminderAlarmActivity itself"
         )
