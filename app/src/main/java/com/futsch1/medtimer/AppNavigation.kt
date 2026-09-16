@@ -1,26 +1,34 @@
 package com.futsch1.medtimer
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.WindowAdaptiveInfo
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidViewBinding
+import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -46,6 +54,15 @@ object NavTestTags {
  * NavigationSuiteScaffold's default (which falls back to a bottom bar when the height is compact —
  * i.e. a landscape phone — the opposite of what we want here).
  */
+/** True when the host activity already saved its fragment state — inflating the
+ * FragmentContainerView now would throw IllegalStateException. Read during composition
+ * (no State involved, so it never triggers recomposition by itself; retry is driven by
+ * retryTick, bumped on ON_START). */
+@SuppressLint("ContextCastToActivity")
+@Composable
+private fun isActivityStateSaved(): Boolean =
+    (LocalContext.current as? FragmentActivity)?.supportFragmentManager?.isStateSaved == true
+
 fun navSuiteType(windowAdaptiveInfo: WindowAdaptiveInfo): NavigationSuiteType =
     if (windowAdaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WIDTH_DP_MEDIUM_LOWER_BOUND)) {
         NavigationSuiteType.NavigationRail
@@ -104,8 +121,19 @@ fun AppNavigationScaffold(
 ) {
     var navController by remember { mutableStateOf<NavController?>(null) }
     var currentDestinationId by remember { mutableIntStateOf(0) }
+    var retryTick by remember { mutableIntStateOf(0) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                retryTick++
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
 
-    val navigationSuiteType = navSuiteType(currentWindowAdaptiveInfo())
+    val navigationSuiteType = navSuiteType(currentWindowAdaptiveInfoV2())
 
     NavigationSuiteScaffold(
         navigationSuiteItems = {
@@ -129,16 +157,27 @@ fun AppNavigationScaffold(
         // NavigationSuiteScaffold already consumes the space its bar or rail occupies, so padding the
         // full system bars here resolves to exactly the sides the content still has to avoid.
         Column(Modifier.windowInsetsPadding(WindowInsets.systemBars)) {
-            AndroidViewBinding(ContentMainBinding::inflate, Modifier.weight(1f)) {
-                // The update block runs on every recomposition; set up exactly once.
-                if (navController == null) {
-                    val fragment = root.getFragment<NavHostFragment>()
-                    val controller = fragment.navController
-                    controller.addOnDestinationChangedListener { _, destination, _ ->
-                        topLevelDestinationId(destination).takeIf { it != 0 }?.let { currentDestinationId = it }
+            // FragmentContainerView commits during inflation, so inflating while the activity is
+            // stopped (e.g. alarm task foregrounded) throws IllegalStateException "after
+            // onSaveInstanceState". Defer only while unbound (navController == null) so a live
+            // NavHost is never disposed, and retry on ON_START via retryTick — the alarm
+            // activity (ReminderAlarmActivity) is independent, so deferring this never blocks
+            // the FSI path. Checked before inflation: try/catch is not allowed around
+            // composable invocations.
+            if (navController == null && isActivityStateSaved() && retryTick >= 0) {
+                Spacer(Modifier.weight(1f))
+            } else {
+                AndroidViewBinding(ContentMainBinding::inflate, Modifier.weight(1f)) {
+                    // The update block runs on every recomposition; set up exactly once.
+                    if (navController == null) {
+                        val fragment = root.getFragment<NavHostFragment>()
+                        val controller = fragment.navController
+                        controller.addOnDestinationChangedListener { _, destination, _ ->
+                            topLevelDestinationId(destination).takeIf { it != 0 }?.let { currentDestinationId = it }
+                        }
+                        navController = controller
+                        onContentBound(fragment)
                     }
-                    navController = controller
-                    onContentBound(fragment)
                 }
             }
         }

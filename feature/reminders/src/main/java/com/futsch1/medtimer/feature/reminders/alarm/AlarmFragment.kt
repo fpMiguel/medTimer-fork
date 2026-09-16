@@ -60,31 +60,41 @@ class AlarmFragment(
         val view = inflater.inflate(R.layout.fragment_alarm, container, false)
 
         lifecycleScope.launch {
-            withContext(ioCoroutineDispatcher) {
-                val reminderNotification = reminderNotificationFactory.create(
-                    reminderNotificationData
-                )!!
-                Log.d(ALARM, "Creating fragment for raised notification $reminderNotification")
-
-                val notificationStrings = NotificationStringBuilder(
-                    requireContext(),
-                    preferencesDataSource,
-                    timeFormatter,
-                    reminderNotification,
-                    false
-                )
-                val intents = notificationIntentBuilderFactory.create(reminderNotification)
-
-                withContext(mainDispatcher) {
-                    setupTexts(
-                        view,
-                        notificationStrings,
-                        reminderNotification.reminderNotificationParts.any { it.medicine.isOutOfStock() })
-                    setupButtons(
-                        view,
-                        intents
+            val result = withContext(ioCoroutineDispatcher) {
+                val notification = reminderNotificationFactory.create(reminderNotificationData)
+                if (notification == null) {
+                    null
+                } else {
+                    val strings = NotificationStringBuilder(
+                        requireContext(),
+                        preferencesDataSource,
+                        timeFormatter,
+                        notification,
+                        false
                     )
+                    val intents = notificationIntentBuilderFactory.create(notification)
+                    Triple(notification, strings, intents)
                 }
+            }
+            if (result == null) {
+                Log.e(ALARM, "Degenerate notification data: factory produced no notification, finishing alarm activity")
+                withContext(mainDispatcher) {
+                    requireActivity().finishAndRemoveTask()
+                }
+                return@launch
+            }
+            val (reminderNotification, notificationStrings, intents) = result
+            Log.d(ALARM, "Creating fragment for raised notification $reminderNotification")
+
+            withContext(mainDispatcher) {
+                setupTexts(
+                    view,
+                    notificationStrings,
+                    reminderNotification.reminderNotificationParts.any { it.medicine.isOutOfStock() })
+                setupButtons(
+                    view,
+                    intents
+                )
             }
         }
 
@@ -134,12 +144,18 @@ class AlarmFragment(
 
     private fun closeWithIntent(pendingIntent: PendingIntent) {
         pendingIntent.send()
-        requireActivity().supportFragmentManager.beginTransaction().remove(this).commit()
+        requireActivity().finishAndRemoveTask()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
-        Log.d(ALARM, "Closing activity")
-        requireActivity().finishAndRemoveTask()
+        Log.d(ALARM, "Alarm fragment view destroyed")
+        // Keep the alarm task out of recents when the alarm closes via a path other than the
+        // action buttons (e.g. system back), while allowing onNewIntent to replace this fragment.
+        // This preserves the pre-existing behavior from 1fd00fa9 ("Fix alarm activity being able
+        // to be restarted"): isFinishing is false during a fragment replacement, true on a real close.
+        if (requireActivity().isFinishing || requireActivity().isDestroyed) {
+            requireActivity().finishAndRemoveTask()
+        }
     }
 }
