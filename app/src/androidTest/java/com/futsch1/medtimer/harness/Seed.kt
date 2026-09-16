@@ -108,9 +108,9 @@ class Seed(
             )
         }
 
-        /** A reminder [after] the one added before it, the way the linked reminder dialog creates it. */
+        /** A reminder [after] the one added before it, the way the linked reminder dialog creates it. linkedReminder uses reminders.size-1 (last added) - position is reminders.size-1. */
         fun linkedReminder(amount: String, after: Duration) {
-            val linkedToPosition = reminders.size - 1
+            val linkedToPosition = reminders.size - 1 // linkedReminder uses reminders.size-1 (last added) - position is reminders.size-1
             add(
                 newReminder().copy(
                     amount = amount,

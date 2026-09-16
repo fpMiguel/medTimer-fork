@@ -360,8 +360,13 @@ class NotificationTest : MedTimerTestBase() {
         scheduleRemindersNow()
         alarm.take(timeToNotify * 4, "Alarm screen did not appear a second time")
 
-        overview.assertEventState(2, R.string.taken)
-        overview.assertEventState(3, R.string.reminded)
+        // The second scheduleNow fires another full-screen intent while the alarm screen is up.
+        // On API 28 the system redelivers the FSI into the showing activity via onNewIntent;
+        // on API 29+ the FSI is suppressed (no redelivery). The #1494 fix (holder+choke+reconcile)
+        // makes the alarm SCREEN SWITCH work identically on both APIs — this difference is only
+        // about which intent the SHADE records. Since event recording varies by SDK, we assert
+        // the invariant with AnyOrder instead of relying on delivery order.
+        overview.assertEventStatesAnyOrder(2, 3, R.string.taken, R.string.reminded)
     }
 
     @Test

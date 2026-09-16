@@ -111,6 +111,48 @@ class MedTimerTestHarness(testClassName: String) : TestRule {
         device.pressHome()
     }
 
+    /**
+     * Prepares the device for a sleeping-device test by disabling doze, whitelisting the app,
+     * granting exact-alarm permission via appops, and performing wake hygiene.
+     * Called before tests that require the device to be asleep and then wake via FSI.
+     * Does NOT press home - the test rule's prepareDevice() already handles that.
+     */
+    fun prepareSleepingDeviceTest() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        try {
+            // Disable doze mode for the test to ensure exact alarms fire on time
+            device.executeShellCommand("dumpsys deviceidle disable")
+            // Whitelist the app so it can use exact alarms and FSI even in doze
+            device.executeShellCommand("dumpsys deviceidle whitelisted add com.futsch1.medtimer")
+            // Grant exact-alarm permission via appops (persists across reinstalls)
+            device.executeShellCommand("appops set com.futsch1.medtimer SCHEDULE_EXACT_ALARM allow")
+        } catch (e: Exception) {
+            // Log but don't fail - some commands may not be available on all API levels
+        }
+
+        // Wake hygiene: ensure device is awake (don't press home - test rule handles that)
+        try {
+            device.wakeUp()
+        } catch (_: RemoteException) {
+            // Ignore
+        }
+    }
+
+    /**
+     * Wake the device and wait a moment for it to stabilize.
+     * Used by tests that need the device to be awake before proceeding.
+     */
+    fun wakeDeviceAndStabilize() {
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        try {
+            device.wakeUp()
+        } catch (_: RemoteException) {
+            // Ignore
+        }
+        // Wait a moment for the device to stabilize after waking
+        Thread.sleep(500)
+    }
+
     companion object {
         /** Runs once per class, before any rule, so a leftover system dialog cannot swallow the first tap. */
         fun dismissANRSystemDialog() {

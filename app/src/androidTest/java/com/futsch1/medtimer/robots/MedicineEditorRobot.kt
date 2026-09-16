@@ -49,6 +49,17 @@ class MedicineEditorRobot(
         create()
     }
 
+    fun addIntervalReminder(amount: String, interval: Duration) {
+        openCard(com.futsch1.medtimer.feature.ui.R.id.continuousIntervalCard)
+        writeTo(AMOUNT, amount)
+
+        clickOn(com.futsch1.medtimer.feature.ui.R.id.intervalMinutes)
+        writeTo(com.futsch1.medtimer.feature.ui.R.id.editIntervalTime, interval.inWholeMinutes.toString())
+
+        closeKeyboard()
+        create()
+    }
+
     fun addHourlyIntervalReminder(amount: String, interval: Duration) {
         openCard(com.futsch1.medtimer.feature.ui.R.id.continuousIntervalCard)
         writeTo(AMOUNT, amount)
