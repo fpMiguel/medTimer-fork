@@ -78,6 +78,11 @@ class Seed(
             medicine = medicine.copy(cannotBeSkipped = true)
         }
 
+        /** The medicine uses a high-and-alarm notification, as if configured in Medicine settings. */
+        fun showAsAlarm() {
+            medicine = medicine.copy(showNotificationAsAlarm = true)
+        }
+
         /** A time based reminder, the kind the time based card creates. */
         fun reminder(
             amount: String,
