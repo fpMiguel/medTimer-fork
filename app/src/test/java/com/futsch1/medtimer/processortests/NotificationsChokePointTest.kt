@@ -101,8 +101,8 @@ class NotificationsChokePointTest {
 
         notifications.showNotification(reminderNotification)
 
-        // must swap the exact same data instance (with notificationId now assigned)
-        verify(alarmRepo).swap(data)
+        // must publish the exact same data instance (with notificationId now assigned)
+        verify(alarmRepo).publish(data)
         // and still post the notification
         verify(notifManager).notify(eq(100), any())
     }
@@ -118,12 +118,12 @@ class NotificationsChokePointTest {
 
         notifications.showNotification(reminderNotification)
 
-        verify(alarmRepo, never()).swap(any())
+        verify(alarmRepo, never()).publish(any())
         verify(notifManager).notify(eq(100), any())
     }
 
     @Test
-    fun chokePoint_isSingleWriter_swapOrderIsBeforeNotify() {
+    fun chokePoint_isSingleWriter_publishOrderIsBeforeNotify() {
         val alarmRepo: AlarmScreenRepository = mock()
         val notifManager: NotificationManager = mock()
         val (notifications, _, _) = createNotifications(alarmScreenRepository = alarmRepo, notificationManager = notifManager)
@@ -133,9 +133,9 @@ class NotificationsChokePointTest {
 
         notifications.showNotification(rn)
 
-        // InOrder verification: swap happens before notify
+        // InOrder verification: publish happens before notify
         val inOrder = org.mockito.Mockito.inOrder(alarmRepo, notifManager)
-        inOrder.verify(alarmRepo).swap(data)
+        inOrder.verify(alarmRepo).publish(data)
         inOrder.verify(notifManager).notify(eq(100), any())
     }
 
@@ -152,15 +152,15 @@ class NotificationsChokePointTest {
         notifications.showNotification(unstamped)
         notifications.showNotification(stamped2)
 
-        // exactly 2 swaps, for the 2 stamped posts
-        verify(alarmRepo, org.mockito.kotlin.times(2)).swap(any())
-        verify(alarmRepo).swap(stamped.reminderNotificationData)
-        verify(alarmRepo).swap(stamped2.reminderNotificationData)
-        verify(alarmRepo, never()).swap(unstamped.reminderNotificationData)
+        // exactly 2 publishs, for the 2 stamped posts
+        verify(alarmRepo, org.mockito.kotlin.times(2)).publish(any())
+        verify(alarmRepo).publish(stamped.reminderNotificationData)
+        verify(alarmRepo).publish(stamped2.reminderNotificationData)
+        verify(alarmRepo, never()).publish(unstamped.reminderNotificationData)
     }
 
     @Test
-    fun swapUsesAssignedNotificationId() {
+    fun publishUsesAssignedNotificationId() {
         val alarmRepo: AlarmScreenRepository = mock()
         val persistent: PersistentDataDataSource = mock()
         whenever(persistent.getAndIncreaseNotificationId()).thenReturn(77)
@@ -180,8 +180,8 @@ class NotificationsChokePointTest {
         assert(data.notificationId == -1)
         notifications.showNotification(ReminderNotification(emptyList(), data))
         // after post, the same data object has been assigned the generated id
-        verify(alarmRepo).swap(org.mockito.kotlin.check { swapped ->
-            assert(swapped.notificationId == 77)
+        verify(alarmRepo).publish(org.mockito.kotlin.check { publishped ->
+            assert(publishped.notificationId == 77)
         })
     }
 }

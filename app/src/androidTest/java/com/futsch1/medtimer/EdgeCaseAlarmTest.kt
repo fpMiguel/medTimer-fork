@@ -32,11 +32,11 @@ private const val REMAINING_MEDICINE = "Remaining med"
 @HiltAndroidTest
 class EdgeCaseAlarmTest : MedTimerTestBase() {
 
-    // TestAlarmProcessor uses setAlarmClock (doze-exempt) so FSI into sleeping device
+    // DozeExemptAlarmProcessor uses setAlarmClock (doze-exempt) so FSI into sleeping device
     // fires deterministically on API 36. Lives only in androidTest; prod uses setExactAndAllowWhileIdle.
     @BindValue
     @JvmField
-    val testAlarmProcessor: com.futsch1.medtimer.feature.reminders.AlarmProcessor = TestAlarmProcessor(
+    val testAlarmProcessor: com.futsch1.medtimer.feature.reminders.AlarmProcessor = DozeExemptAlarmProcessor(
         context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.applicationContext,
         alarmManager = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager,
         timeAccess = timeAccess,
@@ -115,13 +115,13 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
 
         alarm.sleepDevice()
         awaitNextSecond()
-        // Fire through the future-alarm path so TestAlarmProcessor.setAlarmClock (doze-exempt)
+        // Fire through the future-alarm path so DozeExemptAlarmProcessor.setAlarmClock (doze-exempt)
         // wakes even API 30+ from sleep; the immediate Show-now path bypasses AlarmManager.
-        scheduleRemindersNow(FUTURE_ALARM_DELAY)
+        scheduleRemindersNow(SLEEP_FIRE_DELAY_MS)
 
         // Fired through setAlarmClock (doze-exempt): wakes even API 30+ from sleep — proven
         // 2026-09-12 on google_api_36. Hard PASS/FAIL, no skip.
-        alarm.awaitShown(FUTURE_ALARM_DELAY + timeToNotify * 4, "Alarm screen did not appear")
+        alarm.awaitShown(SLEEP_FIRE_DELAY_MS + timeToNotify * 4, "Alarm screen did not appear")
         alarm.assertResumedTopActivityIsAlarmScreen(
             "Alarm must be shown by ReminderAlarmActivity itself"
         )
@@ -135,7 +135,7 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         // single call can leave due chains behind depending on order. Drain until every expected
         // post is present; the assertShows below still fail loudly if one never appears.
         // Each recalc strictly shrinks the due set, so this terminates.
-        fun allForegroundPostsPresent(): Boolean {
+        fun shadeShowsAllPosts(): Boolean {
             var present = false
             notifications.inShade {
                 present = await(ALARM_MEDICINE, SHADE_TIMEOUT) != null &&
@@ -145,9 +145,12 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
             return present
         }
         awaitNextSecond()
-        for (attempt in 1..MAX_RECALC_DRAIN) {
+        for (attempt in 1..MAX_DRAIN_ATTEMPTS) {
             scheduleRemindersNow()
-            if (allForegroundPostsPresent()) break
+            // The Schedule broadcast is handled async on the app side; give the
+            // quiet chain's post up to one shade timeout to land before checking.
+            notifications.inShade { await(QUIET_MEDICINE, SHADE_TIMEOUT) }
+            if (shadeShowsAllPosts()) break
         }
 
         notifications.inShade {
@@ -229,9 +232,9 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
 
     private companion object {
         /** Armed via scheduleRemindersNow() so the dose fires through setAlarmClock while asleep. */
-        const val FUTURE_ALARM_DELAY = 60_000L
+        const val SLEEP_FIRE_DELAY_MS = 30_000L
         /** Upper bound for draining all due chains; each recalc strictly shrinks the due set. */
-        const val MAX_RECALC_DRAIN = 4
+        const val MAX_DRAIN_ATTEMPTS = 4
         const val SWITCH_TIMEOUT = 20_000L
         const val SHADE_TIMEOUT = 5_000L
 

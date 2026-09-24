@@ -13,7 +13,13 @@ class AlarmScreenRepository @Inject constructor() {
     private val _currentAlarm = MutableStateFlow<ReminderNotificationData?>(null)
     val currentAlarm: StateFlow<ReminderNotificationData?> = _currentAlarm.asStateFlow()
 
-    fun swap(candidate: ReminderNotificationData): Boolean {
+    /**
+     * Publishes the latest alarm only if its notification post is at least as recent as the
+     * currently displayed post. The check and update must be atomic because notifications can be
+     * posted concurrently by reminder workers.
+     */
+    @Synchronized
+    fun publish(candidate: ReminderNotificationData): Boolean {
         if (shouldReplaceAlarm(_currentAlarm.value?.notificationId, candidate.notificationId)) {
             _currentAlarm.value = candidate
             return true

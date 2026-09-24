@@ -41,8 +41,8 @@ class Notifications @Inject constructor(
 
         if (reminderNotification.reminderNotificationData.showAsAlarm) {
             // Why: Holder must be ahead of SystemUI FSI resolution.
-            // How: Swap synchronously before notify().
-            alarmScreenRepository.swap(reminderNotification.reminderNotificationData)
+            // How: Publish synchronously before notify().
+            alarmScreenRepository.publish(reminderNotification.reminderNotificationData)
         }
         notify(notificationId, factory.create())
         Log.d(LogTags.REMINDER, String.format("Show notification nID %d: %s", notificationId, reminderNotification))

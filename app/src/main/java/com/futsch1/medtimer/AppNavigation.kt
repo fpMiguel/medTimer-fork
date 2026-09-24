@@ -1,6 +1,7 @@
 package com.futsch1.medtimer
 
 import android.annotation.SuppressLint
+import android.content.Context
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -55,13 +56,10 @@ object NavTestTags {
  * i.e. a landscape phone — the opposite of what we want here).
  */
 /** True when the host activity already saved its fragment state — inflating the
- * FragmentContainerView now would throw IllegalStateException. Read during composition
- * (no State involved, so it never triggers recomposition by itself; retry is driven by
- * retryTick, bumped on ON_START). */
+ * FragmentContainerView now would throw IllegalStateException. */
 @SuppressLint("ContextCastToActivity")
-@Composable
-private fun isActivityStateSaved(): Boolean =
-    (LocalContext.current as? FragmentActivity)?.supportFragmentManager?.isStateSaved == true
+private fun isHostStateSaved(context: Context): Boolean =
+    (context as? FragmentActivity)?.supportFragmentManager?.isStateSaved == true
 
 fun navSuiteType(windowAdaptiveInfo: WindowAdaptiveInfo): NavigationSuiteType =
     if (windowAdaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WIDTH_DP_MEDIUM_LOWER_BOUND)) {
@@ -121,12 +119,13 @@ fun AppNavigationScaffold(
 ) {
     var navController by remember { mutableStateOf<NavController?>(null) }
     var currentDestinationId by remember { mutableIntStateOf(0) }
-    var retryTick by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    var hostStateSaved by remember(context) { mutableStateOf(isHostStateSaved(context)) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(lifecycle) {
+    DisposableEffect(lifecycle, context) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START) {
-                retryTick++
+            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_STOP) {
+                hostStateSaved = isHostStateSaved(context)
             }
         }
         lifecycle.addObserver(observer)
@@ -160,11 +159,11 @@ fun AppNavigationScaffold(
             // FragmentContainerView commits during inflation, so inflating while the activity is
             // stopped (e.g. alarm task foregrounded) throws IllegalStateException "after
             // onSaveInstanceState". Defer only while unbound (navController == null) so a live
-            // NavHost is never disposed, and retry on ON_START via retryTick — the alarm
-            // activity (ReminderAlarmActivity) is independent, so deferring this never blocks
-            // the FSI path. Checked before inflation: try/catch is not allowed around
-            // composable invocations.
-            if (navController == null && isActivityStateSaved() && retryTick >= 0) {
+            // NavHost is never disposed. The ON_START observer refreshes the saved-state value so
+            // the next composition can safely retry — the alarm activity (ReminderAlarmActivity)
+            // is independent, so deferring this never blocks the FSI path. Checked before
+            // inflation: try/catch is not allowed around composable invocations.
+            if (navController == null && hostStateSaved) {
                 Spacer(Modifier.weight(1f))
             } else {
                 AndroidViewBinding(ContentMainBinding::inflate, Modifier.weight(1f)) {

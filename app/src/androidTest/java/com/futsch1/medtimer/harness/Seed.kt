@@ -28,8 +28,8 @@ class Seed(
 ) {
 
     /** Creates [name] with whatever [block] adds to it, and answers its id. */
-    fun medicine(name: String, block: MedicineSeed.() -> Unit = {}): Int = runBlocking {
-        val seed = MedicineSeed(timeAccess).apply(block)
+    fun medicine(name: String, block: MedicineBuilder.() -> Unit = {}): Int = runBlocking {
+        val seed = MedicineBuilder(timeAccess).apply(block)
 
         val medicineId = medicineRepository.create(
             seed.medicine.copy(name = name, sortOrder = medicineRepository.getHighestSortOrder())
@@ -40,8 +40,8 @@ class Seed(
     }
 
     /** Adds reminders to a medicine that is already there - for state a test builds up in steps. */
-    fun remindersOf(medicineId: Int, block: MedicineSeed.() -> Unit) = runBlocking {
-        create(MedicineSeed(timeAccess).apply(block).reminders, medicineId)
+    fun remindersOf(medicineId: Int, block: MedicineBuilder.() -> Unit) = runBlocking {
+        create(MedicineBuilder(timeAccess).apply(block).reminders, medicineId)
     }
 
     /** One write: the app reschedules off each, so a medicine added a reminder at a time is catchable half-built. */
@@ -66,7 +66,7 @@ class Seed(
     }
 
     /** The medicine under construction: its stock, its appearance and the reminders on it. */
-    class MedicineSeed internal constructor(private val timeAccess: TimeAccess) {
+    class MedicineBuilder internal constructor(private val timeAccess: TimeAccess) {
         internal var medicine: Medicine = Medicine.default()
         internal val reminders = mutableListOf<Pair<Reminder, Int?>>()
 

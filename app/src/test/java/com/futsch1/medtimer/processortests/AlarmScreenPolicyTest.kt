@@ -84,46 +84,46 @@ class AlarmScreenPolicyTest {
         assertTrue(candidate.notificationId < current.notificationId)
     }
 
-    // --- AlarmScreenRepository.swap sequences ---
+    // --- AlarmScreenRepository.publish sequences ---
 
     @Test
-    fun swap_doubleDeliveryInterleaving_staysOnNewest() {
+    fun publish_doubleDeliveryInterleaving_staysOnNewest() {
         val repo = AlarmScreenRepository()
         val first = data(id = 7, reminderId = 1, eventId = 1)
         val second = data(id = 5, reminderId = 2, eventId = 2)
 
-        assertTrue(repo.swap(first))
+        assertTrue(repo.publish(first))
         assertEquals(7, repo.currentAlarm.value?.notificationId)
 
         // older ID must not replace newer
-        assertFalse(repo.swap(second))
+        assertFalse(repo.publish(second))
         assertEquals(7, repo.currentAlarm.value?.notificationId)
         // payload must still be first
         assertEquals(listOf(1), repo.currentAlarm.value?.reminderIds)
     }
 
     @Test
-    fun swap_equalId_differentPayload_replacement_secondWins() {
+    fun publish_equalId_differentPayload_replacement_secondWins() {
         val repo = AlarmScreenRepository()
         val first = data(id = 5, reminderId = 1, eventId = 10)
         val second = data(id = 5, reminderId = 2, eventId = 20)
 
-        assertTrue(repo.swap(first))
+        assertTrue(repo.publish(first))
         assertEquals(listOf(1), repo.currentAlarm.value?.reminderIds)
 
         // equal ID with different payload must replace
-        assertTrue(repo.swap(second))
+        assertTrue(repo.publish(second))
         assertEquals(5, repo.currentAlarm.value?.notificationId)
         assertEquals(listOf(2), repo.currentAlarm.value?.reminderIds)
         assertEquals(listOf(20), repo.currentAlarm.value?.reminderEventIds)
     }
 
     @Test
-    fun swap_retention_valuePresentWithNoCollector() {
+    fun publish_retention_valuePresentWithNoCollector() {
         val repo = AlarmScreenRepository()
         val d = data(id = 3, reminderId = 9, eventId = 9)
 
-        assertTrue(repo.swap(d))
+        assertTrue(repo.publish(d))
 
         // No collector subscribed - value must still be present via direct access
         assertNotNull(repo.currentAlarm.value)
@@ -135,16 +135,16 @@ class AlarmScreenPolicyTest {
     }
 
     @Test
-    fun swap_sequence_newerThenOlderThenEqual() {
+    fun publish_sequence_newerThenOlderThenEqual() {
         val repo = AlarmScreenRepository()
-        assertTrue(repo.swap(data(id = 5)))
-        assertTrue(repo.swap(data(id = 7)))
+        assertTrue(repo.publish(data(id = 5)))
+        assertTrue(repo.publish(data(id = 7)))
         assertEquals(7, repo.currentAlarm.value?.notificationId)
-        assertFalse(repo.swap(data(id = 5)))
+        assertFalse(repo.publish(data(id = 5)))
         assertEquals(7, repo.currentAlarm.value?.notificationId)
         // equal to current (7) with new payload should replace
         val equalPayload = data(id = 7, reminderId = 99, eventId = 99)
-        assertTrue(repo.swap(equalPayload))
+        assertTrue(repo.publish(equalPayload))
         assertEquals(listOf(99), repo.currentAlarm.value?.reminderIds)
     }
 

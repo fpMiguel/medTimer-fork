@@ -14,7 +14,7 @@ import javax.inject.Inject
  * Test-only AlarmProcessor that uses setAlarmClock() (doze-exempt) for future alarms.
  * Falls back to super's exact-alarm logic for immediate work. Lives only in androidTest.
  */
-class TestAlarmProcessor @Inject constructor(
+class DozeExemptAlarmProcessor @Inject constructor(
     context: Context,
     alarmManager: AlarmManager,
     timeAccess: TimeAccess,
@@ -22,7 +22,7 @@ class TestAlarmProcessor @Inject constructor(
 ) : AlarmProcessor(context, alarmManager, timeAccess, preferencesDataSource) {
 
     override fun scheduleAlarm(instant: Instant, pendingIntent: PendingIntent) {
-        Log.d("TestAlarmProcessor", "setAlarmClock doze-exempt for $instant")
+        Log.d("DozeExemptAlarmProcessor", "setAlarmClock doze-exempt for $instant")
         // Doze-exempt path for sleeping-device FSI; super would use setExactAndAllowWhileIdle.
         // Keep the same PendingIntent so the OS-reentry path is identical.
         try {
