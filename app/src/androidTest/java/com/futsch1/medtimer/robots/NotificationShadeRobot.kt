@@ -15,13 +15,15 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import com.futsch1.medtimer.utilities.closeNotification
+import com.futsch1.medtimer.utilities.pollUntil
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The system notification shade. Everything here goes through UiAutomator: the shade is another
- * app's window, so neither Espresso nor Compose can see or synchronize with it.
+ * The system notification shade. Shade interactions go through UiAutomator because the shade is
+ * another app's window; publication-only checks use NotificationManager directly so they do not
+ * needlessly open the shade.
  */
 class NotificationShadeRobot {
 
@@ -51,6 +53,17 @@ class NotificationShadeRobot {
 
     fun assertShows(text: String, timeoutMillis: Long = DEFAULT_TIMEOUT): UiObject2 =
         assertNotNull(await(text, timeoutMillis), "No notification containing '$text'. Shade shows: ${shadeTexts()}")
+
+    /** Waits for a posted notification without opening the shade; useful when only publication matters. */
+    fun isPosted(text: String, timeoutMillis: Long = DEFAULT_TIMEOUT): Boolean =
+        pollUntil(timeoutMillis) { postedIdOrNull(text) != null }
+
+    fun assertPosted(text: String, timeoutMillis: Long = DEFAULT_TIMEOUT) {
+        assertTrue(
+            isPosted(text, timeoutMillis),
+            "No posted notification containing '$text'. Posted: ${postedDescriptions()}"
+        )
+    }
 
     fun assertHidden(text: String, timeoutMillis: Long = DEFAULT_TIMEOUT) {
         assertNull(await(text, timeoutMillis), "A notification contains '$text' but should not")

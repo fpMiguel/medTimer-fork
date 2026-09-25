@@ -1,21 +1,15 @@
 package com.futsch1.medtimer
 
-import android.content.Context
-import android.content.SharedPreferences
-import androidx.preference.PreferenceManager
 import androidx.test.platform.app.InstrumentationRegistry
 import com.futsch1.medtimer.core.datastore.PersistentDataDataSource
+import com.futsch1.medtimer.core.datastore.PreferencesDataSource
 import com.futsch1.medtimer.core.ui.R
 import com.futsch1.medtimer.feature.reminders.AlarmScreenRepository
 import com.futsch1.medtimer.feature.reminders.alarm.ReminderAlarmActivity
 import com.futsch1.medtimer.utilities.awaitNextSecond
 import com.futsch1.medtimer.utilities.pollUntil
 import com.futsch1.medtimer.utilities.scheduleRemindersNow
-import com.google.gson.Gson
-import dagger.hilt.android.testing.BindValue
 import dagger.hilt.android.testing.HiltAndroidTest
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import org.junit.Test
 import kotlin.test.assertTrue
 
@@ -26,34 +20,19 @@ private const val REMAINING_MEDICINE = "Remaining med"
 
 /**
  * Why: Guard against unstamped posts hijacking the alarm holder, and ensure equal-ID reduced-payload reposts replace the displayed alarm.
- * How: Production pipeline + holder choke-point, real Doze-exempt notification delivery, explicit activity bootstrap, robot awaits, no mocks/retries; snooze path covered by JVM tests.
+ * How: Production pipeline + holder choke-point, sleeping-device notification publication, explicit activity bootstrap, robot awaits, no mocks/retries; snooze path covered by JVM tests.
  */
 @HiltAndroidTest
 class EdgeCaseAlarmTest : MedTimerTestBase() {
-
-    // DozeExemptAlarmProcessor uses setAlarmClock (doze-exempt) so a scheduled notification is
-    // delivered while the device sleeps on API 36. Lives only in androidTest; prod uses
-    // setExactAndAllowWhileIdle.
-    @BindValue
-    @JvmField
-    val testAlarmProcessor: com.futsch1.medtimer.feature.reminders.AlarmProcessor = DozeExemptAlarmProcessor(
-        context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.applicationContext,
-        alarmManager = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager,
-        timeAccess = timeAccess,
-        preferencesDataSource = com.futsch1.medtimer.core.datastore.PreferencesDataSource(
-            androidx.preference.PreferenceManager.getDefaultSharedPreferences(
-                androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
-            ),
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
-            com.google.gson.Gson(),
-        ),
-    )
 
     @javax.inject.Inject
     lateinit var alarmScreenRepository: AlarmScreenRepository
 
     @javax.inject.Inject
     lateinit var persistentDataDataSource: PersistentDataDataSource
+
+    @javax.inject.Inject
+    lateinit var preferencesDataSource: PreferencesDataSource
 
     /**
      * Barista retries a failed attempt in the SAME app process: the alarm holder survives with
@@ -99,21 +78,13 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         // SystemUI full-screen-intent behavior is device-policy dependent. This test owns the
         // sleeping-device notification/holder contract and opens the activity from the published
         // holder; AlarmIntentRedeliveryTest separately covers the redelivery/bootstrap path.
-        // Dynamic wake check: prepare sleeping device test (doze disable, exact-alarm grant),
-        // wake device, verify awake. Skip only if wake fails after hygiene.
-        testHarness.prepareSleepingDeviceTest()
-        testHarness.wakeDeviceAndStabilize()
-        if (!isDeviceAwake()) {
-            org.junit.Assume.assumeTrue("Device failed to wake after prepareSleepingDeviceTest", false)
-        }
         val timeToNotify = 10_000L
-        alarm.wakeDevice()
 
         val staleNotificationId = alarmScreenRepository.currentAlarm.value?.notificationId
         outrankStaleHolderAlarm(staleNotificationId)
 
-        // The stamped alarm: a future one-shot keeps the alarm on the Doze-exempt setAlarmClock
-        // path instead of posting an immediate notification while the test process is foregrounded.
+        // The stamped alarm: this receiver is the production notification path; the activity is
+        // bootstrapped from its published holder below, so emulator FSI policy stays out of scope.
         seed.medicine(ALARM_MEDICINE) {
             reminder("1", aboutToFire())
             showAsAlarm()
@@ -126,15 +97,14 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         }
 
         alarm.sleepDevice()
-        awaitNextSecond()
-        // Fire through the future-alarm path so DozeExemptAlarmProcessor.setAlarmClock (doze-exempt)
-        // wakes even API 30+ from sleep; the immediate Show-now path bypasses AlarmManager.
-        scheduleRemindersNow(SLEEP_FIRE_DELAY_MS)
+        // Fire through the production receiver while the device is asleep. The test owns holder
+        // publication and display, not the platform's exact-alarm/FSI policy.
+        scheduleRemindersNow()
 
         // The sleeping-device notification path is the product behavior under test. Open the
         // resulting holder payload explicitly so this test does not depend on the emulator's
         // SystemUI full-screen-intent policy; AlarmIntentRedeliveryTest covers redelivery itself.
-        awaitPublishedAlarm(staleNotificationId, SLEEP_FIRE_DELAY_MS + timeToNotify * 4)
+        awaitPublishedAlarm(staleNotificationId, timeToNotify * 4)
         redeliverCurrentHolderToAlarmScreen()
         alarm.awaitShown(timeToNotify * 2, "First alarm screen did not appear")
         alarm.assertResumedTopActivityIsAlarmScreen(
@@ -148,21 +118,14 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         // One recalc raises whatever is currently due and stops at the first future chain, so a
         // single call can leave due chains behind depending on order. Drain until the post is
         // present; the assertShows below still fails loudly if it never appears.
-        var quietShown = false
-        awaitNextSecond()
         for (attempt in 1..MAX_DRAIN_ATTEMPTS) {
             scheduleRemindersNow()
             // The Schedule broadcast is handled async on the app side; give the
-            // quiet chain's post up to one shade timeout to land before checking.
-            notifications.inShade {
-                quietShown = await(QUIET_MEDICINE, SHADE_TIMEOUT) != null
-            }
-            if (quietShown) break
+            // quiet chain's post up to one bounded wait to land before checking.
+            if (notifications.isPosted(QUIET_MEDICINE, SHADE_TIMEOUT)) break
         }
 
-        notifications.inShade {
-            assertShows(QUIET_MEDICINE, SHADE_TIMEOUT)
-        }
+        notifications.assertPosted(QUIET_MEDICINE, SHADE_TIMEOUT)
 
         alarm.awaitShows(ALARM_MEDICINE, SWITCH_TIMEOUT, "Unstamped posts hijacked the displayed alarm")
         alarm.logHygiene("unstamped-posts-settled")
@@ -176,30 +139,35 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
     @Test
     fun equalIdReducedPayloadRepostUpdatesDisplayedAlarm() {
         val timeToNotify = 10_000L
-        outrankStaleHolderAlarm()
+        val staleNotificationId = alarmScreenRepository.currentAlarm.value?.notificationId
+        outrankStaleHolderAlarm(staleNotificationId)
 
-        // Group both same-time doses into ONE notification so a take-action can reduce it.
-        settings.click(R.string.display_settings, R.string.combine_notifications)
+        // This test owns equal-ID reduced-payload behavior, not the editor or the settings UI.
+        // Set the production preference and seed the exact same-time notification shape directly.
+        preferencesDataSource.putBoolean(PreferencesDataSource.COMBINE_NOTIFICATIONS, true)
+        assertTrue(
+            pollUntil(1_000L) { preferencesDataSource.preferences.value.combineNotifications },
+            "The production combine-notifications preference did not become active"
+        )
+        seed.medicine(TAKEN_MEDICINE) {
+            reminder("1", aboutToFire(), variableAmount = true)
+            showAsAlarm()
+        }
+        seed.medicine(REMAINING_MEDICINE) {
+            reminder("1", aboutToFire())
+            showAsAlarm()
+        }
 
-        alarm.wakeDevice()
-
-        medicines.create(TAKEN_MEDICINE)
-        medicineEditor.addReminder("1", aboutToFire())
-        reminders.inSettingsOf(0) { toggleVariableAmount() }
-        medicineSettings.inSettings { setNotificationImportance(R.string.high_and_alarm) }
-
-        navigation.toMedicines()
-        medicines.create(REMAINING_MEDICINE)
-        medicineEditor.addReminder("1", aboutToFire())
-        medicineSettings.inSettings { setNotificationImportance(R.string.high_and_alarm) }
-
-        alarm.sleepDevice()
+        // Repository observers may still be recalculating after the second seed. Let that
+        // first async recalc settle before requesting one deterministic combined notification.
         awaitNextSecond()
-        scheduleRemindersNow()
 
-        alarm.awaitShown(timeToNotify * 4, "Combined two-dose alarm screen did not appear")
-        alarm.awaitShows(TAKEN_MEDICINE, timeToNotify * 2, "First dose missing on alarm screen")
-        alarm.awaitShows(REMAINING_MEDICINE, timeToNotify * 2, "Second dose missing on alarm screen")
+        scheduleRemindersNow()
+        awaitPublishedAlarm(staleNotificationId, timeToNotify * 2)
+        redeliverCurrentHolderToAlarmScreen()
+        alarm.awaitShown(timeToNotify * 2, "Combined two-dose alarm screen did not appear")
+        alarm.awaitShows(TAKEN_MEDICINE, timeToNotify, "First dose missing on alarm screen")
+        alarm.awaitShows(REMAINING_MEDICINE, timeToNotify, "Second dose missing on alarm screen")
 
         // Take ONE dose via its NOTIFICATION ACTION (not the alarm's own button): the variable
         // amount routes the taken intent through MainActivity's dosage dialog, which marks only
@@ -230,15 +198,7 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         alarm.take(SWITCH_TIMEOUT, "Alarm screen did not offer Taken")
     }
 
-    private fun isDeviceAwake(): Boolean {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-        return powerManager.isInteractive
-    }
-
     private companion object {
-        /** Armed via scheduleRemindersNow() so the dose fires through setAlarmClock while asleep. */
-        const val SLEEP_FIRE_DELAY_MS = 5_000L
         /** Upper bound for draining all due chains; each recalc strictly shrinks the due set. */
         const val MAX_DRAIN_ATTEMPTS = 4
         const val SWITCH_TIMEOUT = 20_000L

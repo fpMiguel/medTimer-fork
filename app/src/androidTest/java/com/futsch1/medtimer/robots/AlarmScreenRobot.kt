@@ -69,14 +69,19 @@ class AlarmScreenRobot {
 
     /** Matrix hygiene probe: screen state, keyguard state, observed component - per attempt. */
     fun logHygiene(step: String) {
-        val keyguard = runCatching {
-            device.executeShellCommand("dumpsys window policy")
-                .lineSequence()
-                .firstOrNull { it.contains("mKeyguardOccluded") }?.trim() ?: "unknown"
-        }.getOrDefault("unavailable")
         val screenOn = runCatching { device.isScreenOn }.getOrDefault(false)
+        val resumedActivity = alarmActivity()
+        val keyguard = if (screenOn && resumedActivity != null) {
+            "not-sampled-green-state"
+        } else {
+            runCatching {
+                device.executeShellCommand("dumpsys window policy")
+                    .lineSequence()
+                    .firstOrNull { it.contains("mKeyguardOccluded") }?.trim() ?: "unknown"
+            }.getOrDefault("unavailable")
+        }
         val line = "screenOn=$screenOn keyguard=$keyguard " +
-            "resumedTop=${alarmActivity()?.componentName?.flattenToString() ?: "none"}"
+            "resumedTop=${resumedActivity?.componentName?.flattenToString() ?: "none"}"
         Log.i(HYGIENE_TAG, "[$step] $line")
         println("$HYGIENE_TAG [$step] $line")
     }
@@ -135,7 +140,7 @@ class AlarmScreenRobot {
                 line.contains(ReminderAlarmActivity::class.java.name) &&
                 stackId != null && taskId != null
             ) {
-                return TaskRef(stackId!!, taskId!!)
+                return TaskRef(stackId, taskId)
             }
         }
         return null

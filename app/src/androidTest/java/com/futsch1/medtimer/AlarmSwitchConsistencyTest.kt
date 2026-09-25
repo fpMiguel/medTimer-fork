@@ -21,7 +21,7 @@ private const val SECOND_ALARM_MEDICINE = "Later med"
  * owns the separate sleeping-device notification-delivery contract.
  */
 @HiltAndroidTest
-class AlarmSwitchConsistencyTest : MedTimerTestBase() {
+class AlarmSwitchConsistencyTest : MedTimerTestBase(launchMainActivity = false) {
 
     @Inject
     lateinit var alarmScreenRepository: AlarmScreenRepository
@@ -32,7 +32,6 @@ class AlarmSwitchConsistencyTest : MedTimerTestBase() {
     @Test
     fun foregroundAlarmScreenSwitchesToNewestDose() {
         val timeToNotify = 5_000L
-        alarm.wakeDevice()
 
         val staleNotificationId = alarmScreenRepository.currentAlarm.value?.notificationId
         outrankStaleHolderAlarm(staleNotificationId)

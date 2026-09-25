@@ -28,9 +28,13 @@ import java.io.IOException
 
 /**
  * Everything a MedTimer instrumented test needs before its first interaction, as one rule with an
- * explicit order: name and failure capture, permissions, device state, the activity, Compose.
+ * explicit order: name and failure capture, permissions, device state, and (for UI tests) the
+ * activity/Compose rules. Tests that only drive an alarm activity can skip the UI launch.
  */
-class MedTimerTestHarness(testClassName: String) : TestRule {
+class MedTimerTestHarness(
+    testClassName: String,
+    private val launchMainActivity: Boolean = true
+) : TestRule {
 
     val baristaRule: BaristaRule<MainActivity> = BaristaRule.create(MainActivity::class.java)
     val composeTestRule: ComposeTestRule = createEmptyComposeRule()
@@ -56,15 +60,18 @@ class MedTimerTestHarness(testClassName: String) : TestRule {
         }.toTypedArray()
     )
 
-    override fun apply(base: Statement, description: Description): Statement =
-        RuleChain.outerRule(testName)
+    override fun apply(base: Statement, description: Description): Statement {
+        var chain = RuleChain.outerRule(testName)
             .around(screenshotOnFailure)
             .around(grantPermissionRule)
+        if (launchMainActivity) {
             // Inside the Barista rule so a retried @AllowFlaky attempt starts from a fresh app.
-            .around(baristaRule)
-            .around(composeTestRule)
+            chain = chain.around(baristaRule).around(composeTestRule)
+        }
+        return chain
             .around(startApp)
             .apply(base, description)
+    }
 
     private val startApp = TestRule { base, _ ->
         object : Statement() {
@@ -72,7 +79,9 @@ class MedTimerTestHarness(testClassName: String) : TestRule {
                 prepareDevice()
                 setFailureHandler(failureHandler)
                 failureHandler.resetCapture()
-                baristaRule.launchActivity()
+                if (launchMainActivity) {
+                    baristaRule.launchActivity()
+                }
                 base.evaluate()
             }
         }
@@ -109,48 +118,6 @@ class MedTimerTestHarness(testClassName: String) : TestRule {
         }
 
         device.pressHome()
-    }
-
-    /**
-     * Prepares the device for a sleeping-device test by disabling doze, whitelisting the app,
-     * granting exact-alarm permission via appops, and performing wake hygiene.
-     * Called before tests that require the device to be asleep and then wake via FSI.
-     * Does NOT press home - the test rule's prepareDevice() already handles that.
-     */
-    fun prepareSleepingDeviceTest() {
-        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        try {
-            // Disable doze mode for the test to ensure exact alarms fire on time
-            device.executeShellCommand("dumpsys deviceidle disable")
-            // Whitelist the app so it can use exact alarms and FSI even in doze
-            device.executeShellCommand("dumpsys deviceidle whitelisted add com.futsch1.medtimer")
-            // Grant exact-alarm permission via appops (persists across reinstalls)
-            device.executeShellCommand("appops set com.futsch1.medtimer SCHEDULE_EXACT_ALARM allow")
-        } catch (e: Exception) {
-            // Log but don't fail - some commands may not be available on all API levels
-        }
-
-        // Wake hygiene: ensure device is awake (don't press home - test rule handles that)
-        try {
-            device.wakeUp()
-        } catch (_: RemoteException) {
-            // Ignore
-        }
-    }
-
-    /**
-     * Wake the device and wait a moment for it to stabilize.
-     * Used by tests that need the device to be awake before proceeding.
-     */
-    fun wakeDeviceAndStabilize() {
-        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        try {
-            device.wakeUp()
-        } catch (_: RemoteException) {
-            // Ignore
-        }
-        // Wait a moment for the device to stabilize after waking
-        Thread.sleep(500)
     }
 
     companion object {

@@ -35,10 +35,14 @@ import kotlin.time.toKotlinDuration
 /**
  * The harness, the robots and the values a test needs to build its expectations.
  * Anything that touches the UI lives in a robot - see docs/guidelines/testing.md.
+ * Set [launchMainActivity] to false for tests that only use repositories, notifications, or
+ * [com.futsch1.medtimer.feature.reminders.alarm.ReminderAlarmActivity].
  */
 @HiltAndroidTest
 @UninstallModules(TimeAccessModule::class)
-abstract class MedTimerTestBase {
+abstract class MedTimerTestBase(
+    launchMainActivity: Boolean = true
+) {
     private val hiltRule = HiltAndroidRule(this)
 
     @BindValue
@@ -50,7 +54,7 @@ abstract class MedTimerTestBase {
     @Inject
     lateinit var reminderRepository: ReminderRepository
 
-    private val harness = MedTimerTestHarness(this.javaClass.name)
+    private val harness = MedTimerTestHarness(this.javaClass.name, launchMainActivity)
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain.outerRule(hiltRule)
@@ -154,22 +158,6 @@ abstract class MedTimerTestBase {
     }
 
     protected fun getString(@StringRes textRes: Int): String = robots.getString(textRes)
-
-    /** The test harness for this test class. */
-    protected val testHarness: MedTimerTestHarness = harness
-
-    /**
-     * Prepares the device for a sleeping-device test by disabling doze, whitelisting the app,
-     * granting exact-alarm permission via appops, and performing wake hygiene.
-     * Called before tests that require the device to be asleep and then wake via FSI.
-     */
-    protected fun prepareSleepingDeviceTest() = harness.prepareSleepingDeviceTest()
-
-    /**
-     * Wake the device and wait a moment for it to stabilize.
-     * Used by tests that need the device to be awake before proceeding.
-     */
-    protected fun wakeDeviceAndStabilize() = harness.wakeDeviceAndStabilize()
 
     companion object {
         /** The reminder is created some way into the test, so the interval must clear midnight by more than 0. */

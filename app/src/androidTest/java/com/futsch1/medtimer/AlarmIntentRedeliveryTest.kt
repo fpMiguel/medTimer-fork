@@ -1,6 +1,5 @@
 package com.futsch1.medtimer
 
-import android.app.Activity
 import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -113,7 +112,7 @@ class AlarmIntentRedeliveryTest {
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             text = (ActivityLifecycleMonitorRegistry.getInstance()
                 .getActivitiesInStage(Stage.RESUMED)
-                .firstOrNull { it is ReminderAlarmActivity } as Activity?)
+                .firstOrNull { it is ReminderAlarmActivity })
                 ?.findViewById<TextView>(com.futsch1.medtimer.feature.reminders.R.id.notificationTitle)
                 ?.text
                 ?.toString()
