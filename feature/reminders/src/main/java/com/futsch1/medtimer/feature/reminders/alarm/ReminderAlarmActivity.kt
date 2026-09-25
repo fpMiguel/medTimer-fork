@@ -1,5 +1,6 @@
 package com.futsch1.medtimer.feature.reminders.alarm
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
@@ -11,11 +12,13 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.Settings
 import android.util.Log
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentManager
 import androidx.lifecycle.lifecycleScope
-import com.futsch1.medtimer.core.common.ActivityCodes
 import com.futsch1.medtimer.core.common.LogTags
 import com.futsch1.medtimer.core.datastore.PreferencesDataSource
 import com.futsch1.medtimer.feature.reminders.AlarmScreenRepository
@@ -47,6 +50,9 @@ class ReminderAlarmActivity : AppCompatActivity() {
     lateinit var alarmScreenRepository: AlarmScreenRepository
 
     @Inject
+    lateinit var notificationManager: NotificationManager
+
+    @Inject
     lateinit var vibrator: Vibrator
 
     @Inject
@@ -57,6 +63,23 @@ class ReminderAlarmActivity : AppCompatActivity() {
     // Alarm currently requested to be displayed. Written and read on the main thread only;
     // used to dedupe holder emissions against what is already on screen.
     private var displayedAlarm: ReminderNotificationData? = null
+    private var hasSeenPublishedAlarm = false
+
+    private val alarmFragmentLifecycleCallbacks = object : FragmentManager.FragmentLifecycleCallbacks() {
+        override fun onFragmentViewCreated(
+            fragmentManager: FragmentManager,
+            fragment: Fragment,
+            view: View,
+            savedInstanceState: Bundle?
+        ) {
+            if (fragment is AlarmFragment &&
+                supportFragmentManager.findFragmentById(R.id.alarmFragmentContainer) === fragment
+            ) {
+                // The marker means rendered, not merely queued for a stopped activity.
+                displayedAlarm = fragment.reminderNotificationData
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,9 +92,38 @@ class ReminderAlarmActivity : AppCompatActivity() {
         windowInsetsController.hide(WindowInsetsCompat.Type.statusBars())
 
         setContentView(R.layout.activity_alarm)
+        supportFragmentManager.registerFragmentLifecycleCallbacks(alarmFragmentLifecycleCallbacks, true)
 
-        // Cold-start / recreation fallback: display whatever the launching intent carries.
-        addAlarmFragment(intent)
+        // Prefer the retained holder during cold start/recreation, unless the launching intent is
+        // strictly newer. Equal IDs deliberately keep the holder because a queued equal-ID intent
+        // may carry an older reduced/unreduced payload.
+        val retainedAlarm = alarmScreenRepository.currentAlarm.value
+        val intentAlarm = readAlarmData(intent)?.takeIf { it.valid }
+        val publishedAlarm = readPublishedAlarmFromNotifications()
+        val fallbackAlarm = listOfNotNull(publishedAlarm, intentAlarm).reduceOrNull { current, candidate ->
+            if (candidate.notificationId != current.notificationId &&
+                shouldReplaceAlarm(current.notificationId, candidate.notificationId)
+            ) {
+                candidate
+            } else {
+                current
+            }
+        }
+        val initialAlarm = when {
+            retainedAlarm == null -> fallbackAlarm
+            intentAlarm == null -> retainedAlarm
+            intentAlarm.notificationId != retainedAlarm.notificationId &&
+                shouldReplaceAlarm(retainedAlarm.notificationId, intentAlarm.notificationId) -> {
+                alarmScreenRepository.publish(intentAlarm)
+                intentAlarm
+            }
+            else -> retainedAlarm
+        }
+        if (retainedAlarm == null && fallbackAlarm?.showAsAlarm == true) {
+            alarmScreenRepository.publish(fallbackAlarm)
+        }
+        hasSeenPublishedAlarm = retainedAlarm != null || fallbackAlarm?.showAsAlarm == true
+        addAlarmFragment(initialAlarm)
 
         // Follow the app-wide latest-alarm holder (replay=1 StateFlow). The initial emission
         // replays the retained alarm after process death/recreation; later emissions push
@@ -79,10 +131,14 @@ class ReminderAlarmActivity : AppCompatActivity() {
         lifecycleScope.launch {
             alarmScreenRepository.currentAlarm.collect { candidate ->
                 if (candidate == null) {
-                    // Null holder value: initial StateFlow emission or process-death state.
-                    // Never clear or rebuild the screen from null.
+                    // The initial null is a process with no retained alarm. A later null is an
+                    // explicit holder invalidation and must close the stale alarm task.
+                    if (hasSeenPublishedAlarm && !isFinishing) {
+                        finishAndRemoveTask()
+                    }
                     return@collect
                 }
+                hasSeenPublishedAlarm = true
                 if (isCurrentlyDisplayed(candidate)) {
                     // Exact alarm already on screen.
                     return@collect
@@ -99,6 +155,10 @@ class ReminderAlarmActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (hasSeenPublishedAlarm && alarmScreenRepository.currentAlarm.value == null) {
+            finishAndRemoveTask()
+            return
+        }
         // Why: Reconcile pending holder swaps that weren't visible while stopped.
         // How: Call reconcileFromHolder to sync displayed alarm from holder.
         reconcileFromHolder()
@@ -115,6 +175,10 @@ class ReminderAlarmActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (isFinishing) {
+            displayedAlarm?.let(alarmScreenRepository::clearIfCurrent)
+        }
+        supportFragmentManager.unregisterFragmentLifecycleCallbacks(alarmFragmentLifecycleCallbacks)
         super.onDestroy()
         (alarmExecutor.executor as ExecutorService).awaitTermination(1, TimeUnit.SECONDS)
         releaseMediaPlayer()
@@ -204,35 +268,47 @@ class ReminderAlarmActivity : AppCompatActivity() {
         return true
     }
 
+    private fun readAlarmData(intent: Intent?): ReminderNotificationData? =
+        intent?.extras?.let { extras ->
+            runCatching { extras.toReminderNotificationData() }.getOrNull()
+        }
+
     /**
-     * Why: Cold-start/recreation fallback and onNewIntent bootstrap when holder stale.
-     * How: Parse intent extras and funnel through shared fragment replace with dedupe bookkeeping.
+     * Reconstructs the newest alarm payload after process death. The repository is intentionally
+     * in-memory, while the active notification remains the durable source for a posted alarm.
      */
-    private fun addAlarmFragment(intent: Intent?) {
-        val extras = intent?.extras ?: return
-        addAlarmFragment(extras.toReminderNotificationData())
+    private fun readPublishedAlarmFromNotifications(): ReminderNotificationData? {
+        var latest: ReminderNotificationData? = null
+        notificationManager.activeNotifications.forEach { status ->
+            val data = status.notification.extras.toReminderNotificationData().apply {
+                notificationId = status.id
+            }
+            val previous = latest
+            if (data.valid && data.showAsAlarm &&
+                (previous == null || shouldReplaceAlarm(previous.notificationId, data.notificationId))
+            ) {
+                latest = data
+            }
+        }
+        return latest
     }
 
     /**
-     * Why: Single funnel for all display paths to keep dedupe consistent.
-     * How: Replace fragment, record displayedAlarm; uses commitAllowingStateLoss (stopped paths).
+     * Single funnel for all display paths. The lifecycle callback records the marker only after
+     * the fragment view exists, so a transaction queued while STOPPED cannot suppress recovery.
      */
-    private fun addAlarmFragment(data: ReminderNotificationData) {
+    private fun addAlarmFragment(data: ReminderNotificationData?) {
+        if (data == null) {
+            return
+        }
         Log.d(LogTags.ALARM, "Adding alarm fragment")
-        displayedAlarm = data
-        // commitAllowingStateLoss instead of commit(): display paths can run while the
-        // activity is stopped (holder collector / onNewIntent under a covering dialog or
-        // the shade), where a plain commit() throws IllegalStateException checkStateLoss.
-        // Fragment state loss here is acceptable - every display path re-syncs from the
-        // holder re-sync only when holder != null (cold-start fallback is intent, not holder), so no saved transaction state is ever needed.
         supportFragmentManager.beginTransaction()
             .replace(R.id.alarmFragmentContainer, AlarmFragment::class.java, buildArguments(data))
             .commitAllowingStateLoss()
     }
 
     /**
-     * Why: Dedupe holder emissions vs displayed alarm without redundant replaces.
-     * How: Compare notificationId + order-sensitive reminderEventIds; not a data class, no full-field compare.
+     * Dedupe holder emissions against the fragment that has actually rendered.
      */
     private fun isCurrentlyDisplayed(candidate: ReminderNotificationData): Boolean {
         val displayed = displayedAlarm ?: return false
@@ -241,33 +317,41 @@ class ReminderAlarmActivity : AppCompatActivity() {
     }
 
     /**
-     * Why: SINGLE_TOP delivers second alarm without recreation; must not drop events (issue #1494).
-     * How: Trigger reconcileFromHolder first (holder swapped before notify, always ahead); fallback to intent only if holder null/older (same >= id rule, supports synthetic AlarmIntentRedeliveryTest).
+     * SINGLE_TOP delivers a second alarm without recreation. The holder is authoritative; an
+     * equal-ID intent is deliberately ignored because equal IDs can carry an older reduced/unreduced
+     * payload. A strictly newer intent is adopted into the holder before it is displayed.
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        setIntent(intent)
-
-        // TRIGGER: reconcile the screen with the holder's current value.
         reconcileFromHolder()
 
-        // BOOTSTRAP-FALLBACK guard: fall back to the intent payload only when the holder value
-        // is null or older than the intent's payload (same >= notificationId rule).
-        if (!shouldReplaceAlarm(
-                alarmScreenRepository.currentAlarm.value?.notificationId,
-                intent.getIntExtra(ActivityCodes.EXTRA_NOTIFICATION_ID, -1)
-            )
-        ) {
-            // Holder already carries a more recent alarm than the delivered intent; the
-            // reconciliation above owns the screen.
+        val incoming = readAlarmData(intent)?.takeIf { it.valid } ?: return
+        val currentId = alarmScreenRepository.currentAlarm.value?.notificationId
+        if (currentId == null && hasSeenPublishedAlarm) {
+            // The activity has already displayed an alarm and its holder was explicitly cleared;
+            // a queued redelivery must not resurrect the terminal payload.
             return
         }
-        addAlarmFragment(intent)
+        if (currentId != null &&
+            (incoming.notificationId == currentId || !shouldReplaceAlarm(currentId, incoming.notificationId))
+        ) {
+            return
+        }
+
+        if (currentId == null) {
+            if (incoming.showAsAlarm && !alarmScreenRepository.publish(incoming)) {
+                return
+            }
+        } else if (!alarmScreenRepository.publish(incoming)) {
+            return
+        }
+
+        setIntent(intent)
+        addAlarmFragment(incoming)
     }
 
     /**
-     * Why: Sync trigger for onResume/onNewIntent when collector not visible.
-     * How: Skip null or already-displayed; else replace fragment.
+     * Sync trigger for onResume/onNewIntent when collector has not rendered yet.
      */
     private fun reconcileFromHolder() {
         val candidate = alarmScreenRepository.currentAlarm.value ?: return

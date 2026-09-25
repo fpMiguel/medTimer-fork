@@ -37,9 +37,22 @@ class ReminderNotificationData(
             remindInstant,
             newReminderIds,
             newReminderEventIds,
-            notificationId
+            notificationId,
+            showAsAlarm
         )
     }
+
+    /**
+     * Returns a detached value snapshot for state that must not change when the producer continues
+     * scheduling or updating the original notification data.
+     */
+    fun snapshot(): ReminderNotificationData = ReminderNotificationData(
+        remindInstant,
+        reminderIds.toList(),
+        reminderEventIds.toList(),
+        notificationId,
+        showAsAlarm
+    )
 
     override fun toString(): String {
         return "rIDs $reminderIds rEIDs $reminderEventIds nID $notificationId @ $remindInstant"

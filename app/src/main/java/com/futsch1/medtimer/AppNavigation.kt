@@ -124,8 +124,12 @@ fun AppNavigationScaffold(
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle, context) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_STOP) {
-                hostStateSaved = isHostStateSaved(context)
+            when (event) {
+                // On API 28+, ON_STOP is delivered before onSaveInstanceState. Mark the host
+                // blocked immediately; the next ON_START will re-check the actual flag.
+                Lifecycle.Event.ON_STOP -> hostStateSaved = true
+                Lifecycle.Event.ON_START -> hostStateSaved = isHostStateSaved(context)
+                else -> Unit
             }
         }
         lifecycle.addObserver(observer)
@@ -161,8 +165,10 @@ fun AppNavigationScaffold(
             // onSaveInstanceState". Defer only while unbound (navController == null) so a live
             // NavHost is never disposed. The ON_START observer refreshes the saved-state value so
             // the next composition can safely retry — the alarm activity (ReminderAlarmActivity)
-            // is independent, so deferring this never blocks the FSI path. Checked before
-            // inflation: try/catch is not allowed around composable invocations.
+            // is independent, so deferring this never blocks the FSI path. The ON_STOP observer
+            // marks the host blocked before the later onSaveInstanceState transition on API 28+;
+            // ON_START re-checks the actual flag before retrying. Checked before inflation: try/catch
+            // is not allowed around composable invocations.
             if (navController == null && hostStateSaved) {
                 Spacer(Modifier.weight(1f))
             } else {

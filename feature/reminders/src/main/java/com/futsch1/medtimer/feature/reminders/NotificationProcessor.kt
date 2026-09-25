@@ -31,6 +31,7 @@ import javax.inject.Inject
 class NotificationProcessor @Inject constructor(
     private val alarmProcessor: AlarmProcessor,
     private val notifications: Notifications,
+    private val alarmScreenRepository: AlarmScreenRepository,
     private val stockHandlingProcessor: StockHandlingProcessor,
     private val repeatProcessor: RepeatProcessor,
     private val notificationManager: NotificationManager,
@@ -59,8 +60,19 @@ class NotificationProcessor @Inject constructor(
     }
 
     fun cancelNotification(notificationId: Int) {
-        Log.d(LogTags.REMINDER, "Cancel notification nID $notificationId")
-        notificationManager.cancel(notificationId)
+        synchronized(NotificationTransactionLock.lock) {
+            Log.d(LogTags.REMINDER, "Cancel notification nID $notificationId")
+            notificationManager.cancel(notificationId)
+            alarmScreenRepository.clear(notificationId)
+        }
+    }
+
+    fun cancelNotification(reminderNotificationData: ReminderNotificationData) {
+        synchronized(NotificationTransactionLock.lock) {
+            Log.d(LogTags.REMINDER, "Cancel notification nID ${reminderNotificationData.notificationId}")
+            notificationManager.cancel(reminderNotificationData.notificationId)
+            alarmScreenRepository.clearIfCurrent(reminderNotificationData)
+        }
     }
 
     suspend fun removeRemindersFromNotification(reminderEvents: List<ReminderEvent>) {
@@ -71,30 +83,68 @@ class NotificationProcessor @Inject constructor(
     }
 
     suspend fun removeRemindersFromNotification(notificationId: Int, reminderEventIds: List<Int>) {
-        Log.d(LogTags.REMINDER, "Remove reminders from notification nID $notificationId")
-        for (notification in notificationManager.activeNotifications) {
-            if (notification.id == notificationId) {
-                val reminderNotificationData = notification.notification.extras.toReminderNotificationData()
-                reminderNotificationData.notificationId = notificationId
-                Log.d(LogTags.REMINDER, "Remove reIDs $reminderEventIds from notification nID $notificationId")
-                updateNotification(reminderNotificationData, reminderEventIds)
-            }
-        }
+        val expectedData = synchronized(NotificationTransactionLock.lock) {
+            Log.d(LogTags.REMINDER, "Remove reminders from notification nID $notificationId")
+            notificationManager.activeNotifications
+                .firstOrNull { it.id == notificationId }
+                ?.notification
+                ?.extras
+                ?.toReminderNotificationData()
+                ?.apply { this.notificationId = notificationId }
+        } ?: return
+
+        Log.d(LogTags.REMINDER, "Remove reIDs $reminderEventIds from notification nID $notificationId")
+        updateNotification(expectedData, reminderEventIds)
     }
 
     private suspend fun updateNotification(
-        reminderNotificationData: ReminderNotificationData,
+        expectedData: ReminderNotificationData,
         reminderEventIds: List<Int>
     ) {
-        val newReminderNotificationData = reminderNotificationData.removeReminderEventIds(reminderEventIds)
+        val newReminderNotificationData = expectedData.removeReminderEventIds(reminderEventIds)
         val reminderNotification = reminderNotificationFactory.create(newReminderNotificationData)
-        if (reminderNotification != null) {
-            notifications.showNotification(reminderNotification, reminderNotificationData.notificationId)
-            rescheduleRepeat(newReminderNotificationData)
-        } else {
-            cancelNotification(reminderNotificationData.notificationId)
+        var postedData: ReminderNotificationData? = null
+
+        synchronized(NotificationTransactionLock.lock) {
+            val currentData = notificationManager.activeNotifications
+                .firstOrNull { it.id == expectedData.notificationId }
+                ?.notification
+                ?.extras
+                ?.toReminderNotificationData()
+                ?.apply { this.notificationId = expectedData.notificationId }
+            if (currentData == null || !sameNotificationPayload(currentData, expectedData)) {
+                return@synchronized
+            }
+
+            if (reminderNotification != null) {
+                if (!reminderNotification.reminderNotificationData.showAsAlarm) {
+                    // A same-ID reduction can turn the remaining notification into a normal post.
+                    // Clear only the payload we read; a newer holder must win.
+                    alarmScreenRepository.clearIfCurrent(expectedData)
+                }
+                notifications.showNotification(reminderNotification, expectedData.notificationId)
+                postedData = newReminderNotificationData
+            } else {
+                cancelNotificationLocked(expectedData)
+            }
         }
+
+        postedData?.let { rescheduleRepeat(it) }
     }
+
+    private fun cancelNotificationLocked(reminderNotificationData: ReminderNotificationData) {
+        notificationManager.cancel(reminderNotificationData.notificationId)
+        alarmScreenRepository.clearIfCurrent(reminderNotificationData)
+    }
+
+    private fun sameNotificationPayload(
+        first: ReminderNotificationData,
+        second: ReminderNotificationData
+    ): Boolean =
+        first.notificationId == second.notificationId &&
+            first.reminderIds == second.reminderIds &&
+            first.reminderEventIds == second.reminderEventIds &&
+            first.remindInstant == second.remindInstant
 
     private suspend fun rescheduleRepeat(reminderNotificationData: ReminderNotificationData) {
         val preferences = preferencesDataSource.preferences.value

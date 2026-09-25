@@ -1,52 +1,39 @@
 package com.futsch1.medtimer
 
 import android.widget.TextView
-import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import com.futsch1.medtimer.core.domain.model.Medicine
 import com.futsch1.medtimer.core.domain.model.Reminder
 import com.futsch1.medtimer.core.domain.model.ReminderEvent
+import com.futsch1.medtimer.feature.reminders.AlarmScreenRepository
 import com.futsch1.medtimer.feature.reminders.alarm.ReminderAlarmActivity
 import com.futsch1.medtimer.feature.reminders.api.notificationData.ReminderNotificationData
 import com.futsch1.medtimer.harness.RepositoryEntryPoint
 import com.futsch1.medtimer.utilities.pollUntil
 import dagger.hilt.android.EntryPointAccessors
-import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import kotlinx.coroutines.runBlocking
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
-import org.junit.runner.RunWith
 import java.time.Instant
+import javax.inject.Inject
 import kotlin.test.assertTrue
 
 /**
- * Regression test for https://github.com/Futsch1/medTimer/issues/1494
+ * Regression tests for https://github.com/Futsch1/medTimer/issues/1494
  * ("Alarm can display previous events instead of current ones").
- *
- * The alarm activity is launched with [Intent.FLAG_ACTIVITY_SINGLE_TOP]
- * (ReminderAlarmActivity.getIntent). When a second alarm intent arrives while the
- * activity is already on top, Android delivers it via onNewIntent. Without an
- * onNewIntent override the new data is dropped and the screen keeps showing the
- * PREVIOUS alarm's events.
- *
- * This test drives the exact redelivery path deterministically: launch with the
- * first alarm's data, deliver the second alarm's intent via onNewIntent, and assert
- * the screen now shows the second alarm's medicine.
  */
 @HiltAndroidTest
-@RunWith(AndroidJUnit4::class)
-class AlarmIntentRedeliveryTest {
+class AlarmIntentRedeliveryTest : MedTimerTestBase(launchMainActivity = false) {
 
-    @get:Rule
-    val hiltRule = HiltAndroidRule(this)
+    @Inject
+    lateinit var alarmScreenRepository: AlarmScreenRepository
 
     @Before
-    fun inject() {
-        hiltRule.inject()
+    fun clearRetainedHolder() {
+        alarmScreenRepository.currentAlarm.value?.let(alarmScreenRepository::clearIfCurrent)
     }
 
     private val targetContext get() = InstrumentationRegistry.getInstrumentation().targetContext
@@ -56,51 +43,79 @@ class AlarmIntentRedeliveryTest {
         RepositoryEntryPoint::class.java
     )
 
+    private fun createAlarmData(medicineName: String, notificationId: Int = -1): ReminderNotificationData = runBlocking {
+        val medicineId = entryPoint.medicineRepository().create(Medicine.default().copy(name = medicineName))
+        val reminderId = entryPoint.reminderRepository().create(
+            Reminder.default().copy(medicineRelId = medicineId)
+        )
+        val event = entryPoint.reminderEventRepository().create(
+            ReminderEvent.default().copy(reminderId = reminderId, medicineName = medicineName)
+        )
+        ReminderNotificationData.fromArrays(
+            listOf(reminderId),
+            listOf(event.reminderEventId),
+            Instant.now(),
+            notificationId
+        )
+    }
+
     @Test
     fun secondAlarmIntentReplacesDisplayedEvents() {
-        // Two medicines with one reminder and one raised event each, seeded directly.
-        val medAId = runBlocking { entryPoint.medicineRepository().create(Medicine.default().copy(name = "Meds A")) }
-        val reminderAId = runBlocking { entryPoint.reminderRepository().create(Reminder.default().copy(medicineRelId = medAId)) }
-        val eventA = runBlocking {
-            entryPoint.reminderEventRepository().create(
-                ReminderEvent.default().copy(reminderId = reminderAId, medicineName = "Meds A")
-            )
-        }
-        val medBId = runBlocking { entryPoint.medicineRepository().create(Medicine.default().copy(name = "Meds B")) }
-        val reminderBId = runBlocking { entryPoint.reminderRepository().create(Reminder.default().copy(medicineRelId = medBId)) }
-        val eventB = runBlocking {
-            entryPoint.reminderEventRepository().create(
-                ReminderEvent.default().copy(reminderId = reminderBId, medicineName = "Meds B")
-            )
-        }
-
-        val dataA = ReminderNotificationData.fromArrays(listOf(reminderAId), listOf(eventA.reminderEventId), Instant.now(), -1)
-        val dataB = ReminderNotificationData.fromArrays(listOf(reminderBId), listOf(eventB.reminderEventId), Instant.now(), -1)
-
+        val dataA = createAlarmData("Meds A")
+        val dataB = createAlarmData("Meds B")
         val scenario = androidx.test.core.app.ActivityScenario.launch<ReminderAlarmActivity>(
             ReminderAlarmActivity.getIntent(targetContext, dataA)
         )
 
         try {
-            // First alarm shows its own data.
             assertTrue(
                 pollUntil(10_000) { notificationTitleText()?.contains("Meds A") == true },
                 "Alarm screen should show the first alarm's medicine (Meds A), got: ${notificationTitleText()}"
             )
 
-            // A second alarm intent arrives while the activity is on top (singleTop redelivery).
-            // Instrumentation.callActivityOnNewIntent is the exact entry point the framework
-            // uses (ActivityThread -> performNewIntent -> onNewIntent), so this exercises the
-            // real delivery path instead of a reflection shortcut.
             scenario.onActivity { activity ->
                 InstrumentationRegistry.getInstrumentation()
                     .callActivityOnNewIntent(activity, ReminderAlarmActivity.getIntent(targetContext, dataB))
             }
 
-            // The screen must now show the SECOND alarm's medicine, not the previous one.
             assertTrue(
-                pollUntil(10_000) { notificationTitleText()?.contains("Meds B") == true },
-                "Alarm screen should show the second alarm's medicine (Meds B), got: ${notificationTitleText()}"
+                pollUntil(10_000) {
+                    val title = notificationTitleText()
+                    title?.contains("Meds B") == true && title.contains("Meds A") == false
+                },
+                "Alarm screen should replace Meds A with Meds B, got: ${notificationTitleText()}"
+            )
+        } finally {
+            scenario.close()
+        }
+    }
+
+    @Test
+    fun equalIdIntentCannotReplaceTheCurrentHolder() {
+        val current = createAlarmData("Current med", notificationId = 42)
+        val stale = createAlarmData("Stale med", notificationId = 42)
+        alarmScreenRepository.publish(current)
+        val scenario = androidx.test.core.app.ActivityScenario.launch<ReminderAlarmActivity>(
+            ReminderAlarmActivity.getIntent(targetContext, current)
+        )
+
+        try {
+            assertTrue(
+                pollUntil(10_000) { notificationTitleText()?.contains("Current med") == true },
+                "The current holder should be visible before redelivery"
+            )
+
+            scenario.onActivity { activity ->
+                InstrumentationRegistry.getInstrumentation()
+                    .callActivityOnNewIntent(activity, ReminderAlarmActivity.getIntent(targetContext, stale))
+            }
+
+            assertTrue(
+                pollUntil(10_000) {
+                    val title = notificationTitleText()
+                    title?.contains("Current med") == true && title.contains("Stale med") == false
+                },
+                "An equal-ID stale intent replaced the current holder, got: ${notificationTitleText()}"
             )
         } finally {
             scenario.close()

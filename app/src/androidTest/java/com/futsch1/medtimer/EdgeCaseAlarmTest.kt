@@ -6,6 +6,7 @@ import com.futsch1.medtimer.core.datastore.PreferencesDataSource
 import com.futsch1.medtimer.core.ui.R
 import com.futsch1.medtimer.feature.reminders.AlarmScreenRepository
 import com.futsch1.medtimer.feature.reminders.alarm.ReminderAlarmActivity
+import com.futsch1.medtimer.feature.reminders.api.notificationData.ReminderNotificationData
 import com.futsch1.medtimer.utilities.awaitNextSecond
 import com.futsch1.medtimer.utilities.pollUntil
 import com.futsch1.medtimer.utilities.scheduleRemindersNow
@@ -20,7 +21,8 @@ private const val REMAINING_MEDICINE = "Remaining med"
 
 /**
  * Why: Guard against unstamped posts hijacking the alarm holder, and ensure equal-ID reduced-payload reposts replace the displayed alarm.
- * How: Production pipeline + holder choke-point, sleeping-device notification publication, explicit activity bootstrap, robot awaits, no mocks/retries; snooze path covered by JVM tests.
+ * How: Production notification/holder publication + explicit activity bootstrap; this test does
+ * not claim to verify platform AlarmManager/Doze/FSI delivery. Snooze behavior is covered by JVM tests.
  */
 @HiltAndroidTest
 class EdgeCaseAlarmTest : MedTimerTestBase() {
@@ -49,15 +51,25 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         }
     }
 
-    private fun awaitPublishedAlarm(staleNotificationId: Int?, timeoutMillis: Long) {
+    private fun awaitPublishedHolder(
+        staleNotificationId: Int?,
+        timeoutMillis: Long
+    ): ReminderNotificationData {
+        var published: ReminderNotificationData? = null
         assertTrue(
             pollUntil(timeoutMillis) {
                 alarmScreenRepository.currentAlarm.value?.let { current ->
-                    staleNotificationId == null || current.notificationId > staleNotificationId
+                    if (staleNotificationId == null || current.notificationId > staleNotificationId) {
+                        published = current
+                        true
+                    } else {
+                        false
+                    }
                 } == true
             },
             "The scheduled alarm was not published to the alarm holder"
         )
+        return checkNotNull(published)
     }
 
     /**
@@ -67,17 +79,15 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
      * render, and the dedupe bookkeeping then skips reconciliation as "already displayed".
      * The fallback path rebuilds unconditionally, with data taken verbatim from the holder.
      */
-    private fun redeliverCurrentHolderToAlarmScreen() {
+    private fun redeliverCurrentHolderToAlarmScreen(data: ReminderNotificationData) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val data = alarmScreenRepository.currentAlarm.value ?: return
         context.startActivity(ReminderAlarmActivity.getIntent(context, data))
     }
 
     @Test
     fun unstampedPostsDoNotHijackDisplayedAlarm() {
         // SystemUI full-screen-intent behavior is device-policy dependent. This test owns the
-        // sleeping-device notification/holder contract and opens the activity from the published
-        // holder; AlarmIntentRedeliveryTest separately covers the redelivery/bootstrap path.
+        // notification/holder display contract and opens the activity from the published holder.
         val timeToNotify = 10_000L
 
         val staleNotificationId = alarmScreenRepository.currentAlarm.value?.notificationId
@@ -97,20 +107,21 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         }
 
         alarm.sleepDevice()
-        // Fire through the production receiver while the device is asleep. The test owns holder
-        // publication and display, not the platform's exact-alarm/FSI policy.
+        // Fire through the production receiver. The test owns holder publication and display,
+        // not AlarmManager/Doze/FSI delivery.
         scheduleRemindersNow()
 
-        // The sleeping-device notification path is the product behavior under test. Open the
-        // resulting holder payload explicitly so this test does not depend on the emulator's
-        // SystemUI full-screen-intent policy; AlarmIntentRedeliveryTest covers redelivery itself.
-        awaitPublishedAlarm(staleNotificationId, timeToNotify * 4)
-        redeliverCurrentHolderToAlarmScreen()
+        // Open the resulting holder payload explicitly. SystemUI/AlarmManager delivery is outside
+        // this display-contract test; AlarmIntentRedeliveryTest covers redelivery itself.
+        val firstPublishedAlarm = awaitPublishedHolder(staleNotificationId, timeToNotify * 4)
+        notifications.assertPosted(ALARM_MEDICINE, timeToNotify * 4)
+        redeliverCurrentHolderToAlarmScreen(firstPublishedAlarm)
         alarm.awaitShown(timeToNotify * 2, "First alarm screen did not appear")
         alarm.assertResumedTopActivityIsAlarmScreen(
             "First alarm must be shown by ReminderAlarmActivity itself"
         )
         alarm.awaitShows(ALARM_MEDICINE, timeToNotify * 2, "First alarm shows wrong content")
+        val displayedHolder = firstPublishedAlarm
 
         // Unstamped posts while the alarm screen is foregrounded: the zero-delay recalc raises
         // the quiet reminder. It may leave the post in the shade rather than the holder, so the
@@ -126,6 +137,11 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         }
 
         notifications.assertPosted(QUIET_MEDICINE, SHADE_TIMEOUT)
+        assertTrue(
+            alarmScreenRepository.currentAlarm.value?.notificationId == displayedHolder.notificationId &&
+                alarmScreenRepository.currentAlarm.value?.reminderEventIds == displayedHolder.reminderEventIds,
+            "A normal notification changed the alarm holder"
+        )
 
         alarm.awaitShows(ALARM_MEDICINE, SWITCH_TIMEOUT, "Unstamped posts hijacked the displayed alarm")
         alarm.logHygiene("unstamped-posts-settled")
@@ -134,6 +150,7 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         )
 
         alarm.take(SWITCH_TIMEOUT, "Alarm screen did not offer Taken")
+        awaitHolderCleared()
     }
 
     @Test
@@ -163,11 +180,14 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         awaitNextSecond()
 
         scheduleRemindersNow()
-        awaitPublishedAlarm(staleNotificationId, timeToNotify * 2)
-        redeliverCurrentHolderToAlarmScreen()
+        val combinedPublishedAlarm = awaitPublishedHolder(staleNotificationId, timeToNotify * 2)
+        notifications.assertPosted(TAKEN_MEDICINE, timeToNotify * 2)
+        redeliverCurrentHolderToAlarmScreen(combinedPublishedAlarm)
         alarm.awaitShown(timeToNotify * 2, "Combined two-dose alarm screen did not appear")
         alarm.awaitShows(TAKEN_MEDICINE, timeToNotify, "First dose missing on alarm screen")
         alarm.awaitShows(REMAINING_MEDICINE, timeToNotify, "Second dose missing on alarm screen")
+        val originalNotification = notifications.postedData(TAKEN_MEDICINE)
+        val originalNotificationId = originalNotification.notificationId
 
         // Take ONE dose via its NOTIFICATION ACTION (not the alarm's own button): the variable
         // amount routes the taken intent through MainActivity's dosage dialog, which marks only
@@ -179,23 +199,36 @@ class EdgeCaseAlarmTest : MedTimerTestBase() {
         dialogs.enterTextAndConfirm("1")
 
         // The reduced re-post replaces the shade copy under the SAME notification id.
+        val reducedNotification = notifications.postedData(REMAINING_MEDICINE)
+        assertTrue(
+            reducedNotification.notificationId == originalNotificationId,
+            "Reduced notification did not retain the original notification ID"
+        )
+        assertTrue(
+            reducedNotification.reminderEventIds.size == originalNotification.reminderEventIds.size - 1,
+            "Reduced notification did not contain exactly the remaining event"
+        )
         notifications.inShade {
             assertShows(REMAINING_MEDICINE, SHADE_TIMEOUT)
             assertHidden(TAKEN_MEDICINE, REDUCE_SETTLE_TIMEOUT)
         }
 
-        // The screen follows the holder: the equal-ID reduced payload must REPLACE the displayed
-        // content, not be deduped away as "the alarm already on screen". The replacement itself
-        // happens while the activity is backgrounded (holder flow collector); am start refocuses
-        // the existing singleInstance activity - onNewIntent reconciles from the holder and its
-        // bootstrap fallback ignores an intent without a notification id.
+        // The screen follows the holder after the stopped activity is resumed. No second full
+        // payload is delivered here, so this verifies the collector/onResume recovery itself.
         alarm.resumeAlarmTaskViaAmStart(SWITCH_TIMEOUT, "Alarm task did not come back to the front")
-        redeliverCurrentHolderToAlarmScreen()
         alarm.awaitShows(REMAINING_MEDICINE, SWITCH_TIMEOUT, "Reduced payload lost the remaining dose")
         alarm.awaitHides(TAKEN_MEDICINE, SWITCH_TIMEOUT, "Equal-ID reduced re-post was suppressed")
         alarm.logHygiene("reduced-payload-applied")
 
         alarm.take(SWITCH_TIMEOUT, "Alarm screen did not offer Taken")
+        awaitHolderCleared()
+    }
+
+    private fun awaitHolderCleared() {
+        assertTrue(
+            pollUntil(5_000L) { alarmScreenRepository.currentAlarm.value == null },
+            "Alarm holder was not cleared after the alarm was consumed"
+        )
     }
 
     private companion object {

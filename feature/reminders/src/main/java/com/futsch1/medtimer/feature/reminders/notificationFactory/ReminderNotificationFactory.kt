@@ -35,6 +35,10 @@ abstract class ReminderNotificationFactory(
     reminderNotification.reminderNotificationParts.channelForHighestImportance()
 ) {
 
+    private val showAsAlarm = reminderNotification.reminderNotificationParts
+        .any { it.effectiveShowAsAlarm() }
+        .also { reminderNotification.reminderNotificationData.showAsAlarm = it }
+
     val intents = intentsFactory.create(reminderNotification)
     val notificationStrings =
         NotificationStringBuilder(
@@ -63,14 +67,13 @@ abstract class ReminderNotificationFactory(
         ) {
             builder.setOngoing(true)
         }
-        if (reminderNotification.reminderNotificationParts.any { it.effectiveShowAsAlarm() }) {
+        if (showAsAlarm) {
             addFullScreenIntent()
         }
     }
 
     @SuppressLint("FullScreenIntentPolicy")
     private fun addFullScreenIntent() {
-        reminderNotification.reminderNotificationData.showAsAlarm = true
         val pendingIntent = PendingIntent.getActivity(
             context,
             0,

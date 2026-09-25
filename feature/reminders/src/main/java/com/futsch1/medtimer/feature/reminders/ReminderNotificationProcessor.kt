@@ -60,7 +60,7 @@ class ReminderNotificationProcessor @Inject constructor(
 
     private suspend fun notificationAction(reminderNotification: ReminderNotification) {
         if (reminderNotification.reminderNotificationData.notificationId != -1) {
-            notificationProcessor.cancelNotification(reminderNotification.reminderNotificationData.notificationId)
+            notificationProcessor.cancelNotification(reminderNotification.reminderNotificationData)
         }
 
         // Show notifications for all reminders

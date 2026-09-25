@@ -14,6 +14,8 @@ import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
+import com.futsch1.medtimer.feature.reminders.api.notificationData.ReminderNotificationData
+import com.futsch1.medtimer.feature.reminders.api.notificationData.toReminderNotificationData
 import com.futsch1.medtimer.utilities.closeNotification
 import com.futsch1.medtimer.utilities.pollUntil
 import kotlin.test.assertNotNull
@@ -79,6 +81,15 @@ class NotificationShadeRobot {
     /** The id [text] is posted under, for [awaitRaisedAgain]. Take it before anything can raise it again. */
     fun postedId(text: String): Int =
         assertNotNull(postedIdOrNull(text), "No posted notification contains '$text'. Posted: ${postedDescriptions()}")
+
+    fun postedData(text: String): ReminderNotificationData {
+        val id = postedId(text)
+        return assertNotNull(
+            activeNotifications().firstOrNull { it.id == id }
+                ?.notification?.extras?.toReminderNotificationData(),
+            "No notification data for '$text' (id=$id)"
+        )
+    }
 
     /**
      * Waits for [text], posted under [previousId], to be raised again - a repeat, a snooze coming back.

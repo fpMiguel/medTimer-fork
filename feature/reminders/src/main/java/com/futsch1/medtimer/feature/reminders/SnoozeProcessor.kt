@@ -31,7 +31,7 @@ open class SnoozeProcessor @Inject constructor(
 
         alarmProcessor.setSecondaryAlarm(reminderNotificationData)
 
-        notificationProcessor.cancelNotification(reminderNotificationData.notificationId)
+        notificationProcessor.cancelNotification(reminderNotificationData)
     }
 
     fun processLocationSnooze(reminderNotificationData: ReminderNotificationData) {
@@ -40,6 +40,6 @@ open class SnoozeProcessor @Inject constructor(
         alarmProcessor.cancelPendingReminderNotifications(reminderNotificationData)
         persistentDataDataSource.addPendingLocationSnooze(reminderNotificationData.toPendingSnooze())
         geofenceRegistrar.registerHomeGeofence()
-        notificationProcessor.cancelNotification(reminderNotificationData.notificationId)
+        notificationProcessor.cancelNotification(reminderNotificationData)
     }
 }

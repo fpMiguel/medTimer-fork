@@ -56,17 +56,20 @@ class AlarmFragment(
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?
-    ): View? {
-        val view = inflater.inflate(R.layout.fragment_alarm, container, false)
+    ): View = inflater.inflate(R.layout.fragment_alarm, container, false)
 
-        lifecycleScope.launch {
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        val context = requireContext()
+        viewLifecycleOwner.lifecycleScope.launch {
             val result = withContext(ioCoroutineDispatcher) {
                 val notification = reminderNotificationFactory.create(reminderNotificationData)
                 if (notification == null) {
                     null
                 } else {
                     val strings = NotificationStringBuilder(
-                        requireContext(),
+                        context,
                         preferencesDataSource,
                         timeFormatter,
                         notification,
@@ -78,7 +81,7 @@ class AlarmFragment(
             }
             if (result == null) {
                 Log.e(ALARM, "Degenerate notification data: factory produced no notification, finishing alarm activity")
-                withContext(mainDispatcher) {
+                if (isAdded && parentFragmentManager.findFragmentById(R.id.alarmFragmentContainer) === this@AlarmFragment) {
                     requireActivity().finishAndRemoveTask()
                 }
                 return@launch
@@ -97,9 +100,6 @@ class AlarmFragment(
                 )
             }
         }
-
-
-        return view
     }
 
     private fun setupTexts(
@@ -152,10 +152,11 @@ class AlarmFragment(
         Log.d(ALARM, "Alarm fragment view destroyed")
         // Keep the alarm task out of recents when the alarm closes via a path other than the
         // action buttons (e.g. system back), while allowing onNewIntent to replace this fragment.
-        // This preserves the pre-existing behavior from 1fd00fa9 ("Fix alarm activity being able
-        // to be restarted"): isFinishing is false during a fragment replacement, true on a real close.
-        if (requireActivity().isFinishing || requireActivity().isDestroyed) {
-            requireActivity().finishAndRemoveTask()
+        // This preserves the pre-existing behavior from 1fd00fa9 ("Fix alarm activity being able to
+        // be restarted"): isFinishing is false during a fragment replacement, true on a real close.
+        val activity = activity ?: return
+        if (activity.isFinishing || activity.isDestroyed) {
+            activity.finishAndRemoveTask()
         }
     }
 }

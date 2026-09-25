@@ -79,11 +79,10 @@ class PersistentDataDataSource @Inject constructor(
         defaultSharedPreferences.edit { putString(LAST_AUTOMATIC_BACKUP, localDate.toString()) }
     }
 
-    @Synchronized
-    fun getAndIncreaseNotificationId(): Int {
+    fun getAndIncreaseNotificationId(): Int = synchronized(NOTIFICATION_ID_LOCK) {
         val current = medTimerSharedPreferences.getInt(NOTIFICATION_ID, PersistentData.default().notificationId)
         medTimerSharedPreferences.edit { putInt(NOTIFICATION_ID, current + 1) }
-        return current
+        current
     }
 
     fun setFilterTags(filterTags: Set<String>) {
@@ -190,6 +189,8 @@ class PersistentDataDataSource @Inject constructor(
     }
 
     companion object {
+        private val NOTIFICATION_ID_LOCK = Any()
+
         const val SHOW_NOTIFICATION = "show_notification"
         const val ICON_COLOR = "icon_color"
         const val ACTIVE_STATISTICS_FRAGMENT = "active_statistics_fragment"

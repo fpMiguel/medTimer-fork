@@ -54,6 +54,16 @@ class AlarmScreenRobot {
         )
     }
 
+    /** Stable identity for the resumed alarm activity across a replacement assertion. */
+    fun activityIdentity(): Int? = alarmActivity()?.let { System.identityHashCode(it) }
+
+    fun assertActivityIdentity(expected: Int, timeoutMillis: Long, message: String) {
+        assertTrue(
+            pollUntil(timeoutMillis) { activityIdentity() == expected },
+            message
+        )
+    }
+
     /**
      * Why: MainActivity is also singleInstance, so RESUMED top must be explicitly validated.
      * How: Assert component className == ReminderAlarmActivity; log resumed component.
@@ -86,34 +96,6 @@ class AlarmScreenRobot {
         println("$HYGIENE_TAG [$step] $line")
     }
 
-    /**
-     * Presses Home, waits for the alarm to drop out of RESUMED, then brings THE ALARM TASK back
-     * to the front through the system task-stack path (`am stack movetask` - the primitive the
-     * recents UI performs on tap). Deliberately NOT the launcher: a launcher tap opens
-     * MainActivity, while ReminderAlarmActivity is non-launcher and lives in its own task.
-     * The task is resolved by its top activity COMPONENT, so the right task is disambiguated.
-     */
-    fun pressHomeAndResumeAlarmTask(timeoutMillis: Long, message: String) {
-        device.pressHome()
-        assertTrue(
-            pollUntil(timeoutMillis) { alarmActivity() == null },
-            "ReminderAlarmActivity still resumed after pressing Home"
-        )
-        logHygiene("after-home-before-task-resume")
-        wakeDevice()
-        val resumed = pollUntil(timeoutMillis) {
-            val task = findAlarmTask()
-            if (task == null) {
-                Log.i(HYGIENE_TAG, "[recents-resume] alarm task not listed; stack=${stackListSummary()}")
-                return@pollUntil false
-            }
-            device.executeShellCommand("am stack move-task ${task.taskId} ${task.stackId} true")
-            logHygiene("recents-resume-attempt")
-            alarmActivity() != null
-        }
-        assertTrue(resumed, message)
-    }
-
     private fun displays(text: String): Boolean {
         val activity = alarmActivity() ?: return false
         return try {
@@ -126,41 +108,10 @@ class AlarmScreenRobot {
         }
     }
 
-    /** Finds the recents entry whose top activity is the alarm screen; null while not yet listed. */
-    private fun findAlarmTask(): TaskRef? {
-        val stackList = runCatching { device.executeShellCommand("am stack list") }
-            .getOrDefault("")
-        var stackId: String? = null
-        var taskId: String? = null
-        for (line in stackList.lineSequence()) {
-            // API 28: "Stack id=0 ..."; other builds: "Tasks in Stack id=0 ..."
-            Regex("Stack id=(\\d+)").find(line)?.let { stackId = it.groupValues[1] }
-            Regex("taskId=(\\d+)").find(line)?.let { taskId = it.groupValues[1] }
-            if (line.contains("topActivity=") &&
-                line.contains(ReminderAlarmActivity::class.java.name) &&
-                stackId != null && taskId != null
-            ) {
-                return TaskRef(stackId, taskId)
-            }
-        }
-        return null
-    }
-
-    private fun stackListSummary(): String = runCatching {
-        device.executeShellCommand("am stack list")
-            .lineSequence()
-            .filter { it.contains("taskId=") }
-            .map { it.trim().take(120) }
-            .joinToString(" || ")
-    }.getOrDefault("unavailable")
-
     /**
-     * Brings the alarm task back to the front via `am start` on the singleInstance alarm
-     * activity (the shell equivalent of tapping its recents entry, for states where
-     * `am stack move-task` executes but does not focus the task). The extras-less intent hits
-     * [ReminderAlarmActivity.onNewIntent], which reconciles from the holder and whose bootstrap
-     * fallback correctly ignores an intent without a notification id - so what is displayed is
-     * purely the holder's current payload.
+     * Brings the alarm task back to the front via the app context on the singleInstance alarm
+     * activity. The extras-less intent only triggers [ReminderAlarmActivity.onNewIntent]'s holder
+     * reconciliation; it never supplies a second payload.
      */
     fun resumeAlarmTaskViaAmStart(timeoutMillis: Long, message: String) {
         val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
@@ -187,7 +138,7 @@ class AlarmScreenRobot {
     fun take(timeoutMillis: Long, message: String) {
         awaitShown(timeoutMillis, message)
         lastClickError = null
-        val closed = pollUntil(CLOSE_TIMEOUT) {
+        val closed = pollUntil(minOf(CLOSE_TIMEOUT, timeoutMillis)) {
             clickTaken()
             alarmActivity() == null
         }
@@ -205,28 +156,6 @@ class AlarmScreenRobot {
         }
     }
 
-    /** Presses Snooze until the alarm closes, mirroring [take]. */
-    fun snooze(timeoutMillis: Long, message: String) {
-        awaitShown(timeoutMillis, message)
-        lastClickError = null
-        val closed = pollUntil(CLOSE_TIMEOUT) {
-            clickSnooze()
-            alarmActivity() == null
-        }
-        assertTrue(closed, "Alarm screen did not close on snooze" + (lastClickError?.let { ": $it" } ?: ""))
-    }
-
-    private fun clickSnooze() {
-        val activity = alarmActivity() ?: return
-        try {
-            onView(withId(com.futsch1.medtimer.feature.reminders.R.id.snoozeButton))
-                .inRoot(RootMatchers.withDecorView(`is`(activity.window.decorView)))
-                .perform(click())
-        } catch (e: Throwable) {
-            lastClickError = e
-        }
-    }
-
     private fun alarmActivity(): Activity? {
         var activity: Activity? = null
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
@@ -236,8 +165,6 @@ class AlarmScreenRobot {
         }
         return activity
     }
-
-    private data class TaskRef(val stackId: String, val taskId: String)
 
     private companion object {
         const val CLOSE_TIMEOUT = 10_000L

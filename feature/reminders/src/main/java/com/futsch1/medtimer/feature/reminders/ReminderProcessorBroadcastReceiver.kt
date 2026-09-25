@@ -118,6 +118,12 @@ class ReminderProcessorBroadcastReceiver : BroadcastReceiver() {
          * minutes the user configured. Lets a test wait seconds for a path whose real interval is
          * minutes, with everything but the alarm timestamp still going through production code.
          */
+        /** Test-only cleanup for the static scheduling seam after an interrupted attempt. */
+        fun resetTestScheduleState() {
+            AlarmProcessor.delay = -1
+            AlarmProcessor.repeats = -1
+        }
+
         fun armNextAlarmsForTests(delay: Long, repeats: Int = 0) {
             AlarmProcessor.delay = delay
             AlarmProcessor.repeats = repeats

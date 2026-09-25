@@ -1,8 +1,10 @@
 package com.futsch1.medtimer
 
+import androidx.test.core.app.ActivityScenario
 import com.futsch1.medtimer.core.datastore.PersistentDataDataSource
 import com.futsch1.medtimer.feature.reminders.AlarmScreenRepository
 import com.futsch1.medtimer.feature.reminders.alarm.ReminderAlarmActivity
+import com.futsch1.medtimer.feature.reminders.api.notificationData.ReminderNotificationData
 import com.futsch1.medtimer.utilities.pollUntil
 import com.futsch1.medtimer.utilities.scheduleRemindersNow
 import dagger.hilt.android.testing.HiltAndroidTest
@@ -42,38 +44,58 @@ class AlarmSwitchConsistencyTest : MedTimerTestBase(launchMainActivity = false) 
             showAsAlarm()
         }
         scheduleRemindersNow()
-        val firstAlarm = awaitPublishedAlarm(staleNotificationId, timeToNotify * 2)
+        val firstAlarm = awaitPublishedHolder(staleNotificationId, timeToNotify * 2)
+        notifications.assertPosted(FIRST_ALARM_MEDICINE, timeToNotify * 2)
 
-        // The real notification pipeline has published the first alarm. Open the same activity
-        // that the platform's full-screen intent would open, without making this display test
-        // depend on emulator keyguard/FSI policy.
-        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        context.startActivity(ReminderAlarmActivity.getIntent(context, firstAlarm))
-        alarm.awaitShown(timeToNotify * 2, "First alarm screen did not appear")
-        alarm.logHygiene("first-alarm-shown")
-        alarm.assertResumedTopActivityIsAlarmScreen(
-            "First alarm must be shown by ReminderAlarmActivity itself"
+        // The real notification pipeline has published the first alarm. ActivityScenario keeps
+        // ownership of the alarm task explicit and avoids a background start-activity policy.
+        val scenario = ActivityScenario.launch<ReminderAlarmActivity>(
+            ReminderAlarmActivity.getIntent(
+                androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext,
+                firstAlarm
+            )
         )
-        alarm.awaitShows(FIRST_ALARM_MEDICINE, timeToNotify, "First alarm shows wrong content")
+        try {
+            alarm.awaitShown(timeToNotify * 2, "First alarm screen did not appear")
+            alarm.logHygiene("first-alarm-shown")
+            alarm.assertResumedTopActivityIsAlarmScreen(
+                "First alarm must be shown by ReminderAlarmActivity itself"
+            )
+            alarm.awaitShows(FIRST_ALARM_MEDICINE, timeToNotify, "First alarm shows wrong content")
+            val firstActivityIdentity = checkNotNull(alarm.activityIdentity())
 
-        // Add the second alarm only after the first screen is RESUMED. Its 10-minute due time is
-        // earlier than the first chain's next 2-hour occurrence, so one zero-delay schedule
-        // deterministically posts the second alarm last without relying on scheduler retry order.
-        seed.medicine(SECOND_ALARM_MEDICINE) {
-            reminder("1", aboutToFire())
-            showAsAlarm()
+            // Add the second alarm only after the first screen is RESUMED. Its 10-minute due time is
+            // earlier than the first chain's next 2-hour occurrence, so one zero-delay schedule
+            // deterministically posts the second alarm last without relying on scheduler retry order.
+            seed.medicine(SECOND_ALARM_MEDICINE) {
+                reminder("1", aboutToFire())
+                showAsAlarm()
+            }
+            scheduleRemindersNow()
+            notifications.assertPosted(SECOND_ALARM_MEDICINE, SWITCH_TIMEOUT)
+
+            alarm.awaitShows(SECOND_ALARM_MEDICINE, SWITCH_TIMEOUT, "Display did not switch to second dose")
+            alarm.assertActivityIdentity(
+                firstActivityIdentity,
+                SWITCH_TIMEOUT,
+                "Alarm activity was recreated instead of receiving the second alarm"
+            )
+            alarm.awaitHides(FIRST_ALARM_MEDICINE, SWITCH_TIMEOUT, "First alarm content remained visible")
+            alarm.logHygiene("switched-to-second-dose")
+            alarm.assertResumedTopActivityIsAlarmScreen(
+                "Switched display must still live in ReminderAlarmActivity"
+            )
+
+            // Close the alarm through its own Taken button so no alarm activity survives this test
+            // into a subsequent run.
+            alarm.take(SWITCH_TIMEOUT / 2, "Switched alarm screen did not offer Taken")
+            assertTrue(
+                pollUntil(5_000L) { alarmScreenRepository.currentAlarm.value == null },
+                "Alarm holder was not cleared after the alarm was consumed"
+            )
+        } finally {
+            scenario.close()
         }
-        scheduleRemindersNow()
-
-        alarm.awaitShows(SECOND_ALARM_MEDICINE, SWITCH_TIMEOUT, "Display did not switch to second dose")
-        alarm.logHygiene("switched-to-second-dose")
-        alarm.assertResumedTopActivityIsAlarmScreen(
-            "Switched display must still live in ReminderAlarmActivity"
-        )
-
-        // Close the alarm through its own Taken button so no alarm activity survives this test
-        // into a subsequent run.
-        alarm.take(SWITCH_TIMEOUT / 2, "Switched alarm screen did not offer Taken")
     }
 
     private fun outrankStaleHolderAlarm(staleNotificationId: Int?) {
@@ -82,17 +104,26 @@ class AlarmSwitchConsistencyTest : MedTimerTestBase(launchMainActivity = false) 
         }
     }
 
-    private fun awaitPublishedAlarm(staleNotificationId: Int?, timeoutMillis: Long) =
+    private fun awaitPublishedHolder(
+        staleNotificationId: Int?,
+        timeoutMillis: Long
+    ): ReminderNotificationData {
+        var published: ReminderNotificationData? = null
         assertTrue(
             pollUntil(timeoutMillis) {
                 alarmScreenRepository.currentAlarm.value?.let { current ->
-                    staleNotificationId == null || current.notificationId > staleNotificationId
+                    if (staleNotificationId == null || current.notificationId > staleNotificationId) {
+                        published = current
+                        true
+                    } else {
+                        false
+                    }
                 } == true
             },
             "The first alarm was not published to the alarm holder"
-        ).let {
-            checkNotNull(alarmScreenRepository.currentAlarm.value)
-        }
+        )
+        return checkNotNull(published)
+    }
 
     private companion object {
         const val SWITCH_TIMEOUT = 10_000L

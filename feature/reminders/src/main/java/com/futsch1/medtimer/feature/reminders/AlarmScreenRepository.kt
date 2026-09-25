@@ -20,10 +20,43 @@ class AlarmScreenRepository @Inject constructor() {
      */
     @Synchronized
     fun publish(candidate: ReminderNotificationData): Boolean {
-        if (shouldReplaceAlarm(_currentAlarm.value?.notificationId, candidate.notificationId)) {
-            _currentAlarm.value = candidate
+        val snapshot = candidate.snapshot()
+        if (shouldReplaceAlarm(_currentAlarm.value?.notificationId, snapshot.notificationId)) {
+            _currentAlarm.value = snapshot
             return true
         }
         return false
     }
+
+    /** Clears the holder only when [candidate] is still the payload that is displayed. */
+    @Synchronized
+    fun clearIfCurrent(candidate: ReminderNotificationData): Boolean {
+        val current = _currentAlarm.value ?: return false
+        if (!samePayload(current, candidate)) {
+            return false
+        }
+        _currentAlarm.value = null
+        return true
+    }
+
+    /** Clears a holder identified only by notification ID. */
+    @Synchronized
+    fun clear(notificationId: Int): Boolean {
+        val current = _currentAlarm.value ?: return false
+        if (current.notificationId != notificationId) {
+            return false
+        }
+        _currentAlarm.value = null
+        return true
+    }
+
+    // The scheduled instant may change during snooze/repeat processing; event identity is the
+    // terminal-display identity.
+    private fun samePayload(
+        first: ReminderNotificationData,
+        second: ReminderNotificationData
+    ): Boolean =
+        first.notificationId == second.notificationId &&
+            first.reminderIds == second.reminderIds &&
+            first.reminderEventIds == second.reminderEventIds
 }

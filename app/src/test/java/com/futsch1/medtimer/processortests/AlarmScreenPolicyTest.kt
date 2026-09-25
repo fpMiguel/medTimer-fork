@@ -11,6 +11,7 @@ import com.futsch1.medtimer.feature.reminders.notificationData.shouldReplaceAlar
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.Mockito.`when`
@@ -18,6 +19,9 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class AlarmScreenPolicyTest {
 
@@ -298,5 +302,61 @@ class AlarmScreenPolicyTest {
         val (bundle, store) = mapBackedBundle()
         store[ActivityCodes.EXTRA_NOTIFICATION_ID] = 11
         assertFalse(bundle.toReminderNotificationData().showAsAlarm)
+    }
+
+    @Test
+    fun removeReminderEventIds_preservesAlarmStamp() {
+        val original = data(id = 5, reminderId = 1, eventId = 10)
+        val reduced = original.removeReminderEventIds(listOf(10))
+
+        assertTrue(reduced.showAsAlarm)
+        assertEquals(listOf<Int>(), reduced.reminderEventIds)
+    }
+
+    @Test
+    fun publish_storesSnapshot_and_clearIfCurrent_onlyClearsMatchingPayload() {
+        val repo = AlarmScreenRepository()
+        val original = data(id = 5, reminderId = 1, eventId = 10)
+        val originalInstant = original.remindInstant
+        val clearCandidate = original.snapshot()
+
+        assertTrue(repo.publish(original))
+        original.remindInstant = Instant.ofEpochSecond(999)
+
+        assertEquals(originalInstant, repo.currentAlarm.value?.remindInstant)
+        assertTrue(repo.clearIfCurrent(clearCandidate))
+        assertNull(repo.currentAlarm.value)
+    }
+
+    @Test
+    fun shouldReplaceAlarm_handlesIntWrap() {
+        assertTrue(shouldReplaceAlarm(Int.MAX_VALUE, Int.MIN_VALUE))
+        assertFalse(shouldReplaceAlarm(Int.MIN_VALUE, Int.MAX_VALUE))
+    }
+
+    @Test
+    fun publish_concurrentWriters_keepLargestId() {
+        val repo = AlarmScreenRepository()
+        val pool = Executors.newFixedThreadPool(8)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(100)
+
+        try {
+            repeat(100) { id ->
+                pool.execute {
+                    try {
+                        start.await()
+                        repo.publish(data(id = id))
+                    } finally {
+                        done.countDown()
+                    }
+                }
+            }
+            start.countDown()
+            assertTrue(done.await(5, TimeUnit.SECONDS))
+            assertEquals(99, repo.currentAlarm.value?.notificationId)
+        } finally {
+            pool.shutdownNow()
+        }
     }
 }

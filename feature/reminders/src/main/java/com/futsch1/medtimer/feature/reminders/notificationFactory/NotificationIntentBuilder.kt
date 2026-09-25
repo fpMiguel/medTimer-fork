@@ -87,7 +87,7 @@ class NotificationIntentBuilder @AssistedInject constructor(
                 context,
                 reminderNotification.reminderNotificationData.notificationId,
                 snooze,
-                PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         } else {
             val snooze = getSnoozeIntent(

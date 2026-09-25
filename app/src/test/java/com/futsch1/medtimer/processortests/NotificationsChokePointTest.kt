@@ -4,13 +4,18 @@ import android.app.Notification
 import android.app.NotificationManager
 import com.futsch1.medtimer.core.datastore.PersistentDataDataSource
 import com.futsch1.medtimer.core.datastore.PreferencesDataSource
+import com.futsch1.medtimer.core.domain.model.Medicine
+import com.futsch1.medtimer.core.domain.model.Reminder
+import com.futsch1.medtimer.core.domain.model.ReminderEvent
 import com.futsch1.medtimer.core.domain.model.UserPreferences
 import com.futsch1.medtimer.feature.reminders.AlarmScreenRepository
 import com.futsch1.medtimer.feature.reminders.NotificationSoundManager
 import com.futsch1.medtimer.feature.reminders.Notifications
 import com.futsch1.medtimer.feature.reminders.api.notificationData.ReminderNotificationData
 import com.futsch1.medtimer.feature.reminders.notificationData.ReminderNotification
+import com.futsch1.medtimer.feature.reminders.notificationData.ReminderNotificationPart
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
@@ -33,6 +38,8 @@ class NotificationsChokePointTest {
         val prefs = UserPreferences.default().copy(bigNotifications = false)
         whenever(preferencesDataSource.preferences).thenReturn(MutableStateFlow(prefs))
         whenever(persistentDataDataSource.getAndIncreaseNotificationId()).thenReturn(100)
+        whenever(alarmScreenRepository.currentAlarm).thenReturn(MutableStateFlow(null))
+        whenever(alarmScreenRepository.publish(any())).thenReturn(true)
 
         val mockNotification = mock<Notification>()
 
@@ -80,6 +87,32 @@ class NotificationsChokePointTest {
         )
     }
 
+    private fun stampedNotification(data: ReminderNotificationData): ReminderNotification =
+        ReminderNotification(
+            listOf(
+                ReminderNotificationPart(
+                    reminder = Reminder.default().copy(
+                        notificationImportance = Reminder.NotificationImportance.HIGH_AND_ALARM
+                    ),
+                    reminderEvent = ReminderEvent.default(),
+                    medicine = Medicine.default()
+                )
+            ),
+            data
+        )
+
+    private fun normalNotification(data: ReminderNotificationData): ReminderNotification =
+        ReminderNotification(
+            listOf(
+                ReminderNotificationPart(
+                    reminder = Reminder.default(),
+                    reminderEvent = ReminderEvent.default(),
+                    medicine = Medicine.default()
+                )
+            ),
+            data
+        )
+
     private fun unstampedData(id: Int = 1): ReminderNotificationData {
         return ReminderNotificationData(
             remindInstant = Instant.now(),
@@ -97,7 +130,7 @@ class NotificationsChokePointTest {
         val (notifications, _, _) = createNotifications(alarmScreenRepository = alarmRepo, notificationManager = notifManager)
 
         val data = stampedData()
-        val reminderNotification = ReminderNotification(emptyList(), data)
+        val reminderNotification = stampedNotification(data)
 
         notifications.showNotification(reminderNotification)
 
@@ -129,7 +162,7 @@ class NotificationsChokePointTest {
         val (notifications, _, _) = createNotifications(alarmScreenRepository = alarmRepo, notificationManager = notifManager)
 
         val data = stampedData()
-        val rn = ReminderNotification(emptyList(), data)
+        val rn = stampedNotification(data)
 
         notifications.showNotification(rn)
 
@@ -144,9 +177,9 @@ class NotificationsChokePointTest {
         val alarmRepo: AlarmScreenRepository = mock()
         val (notifications, _, _) = createNotifications(alarmScreenRepository = alarmRepo)
 
-        val stamped = ReminderNotification(emptyList(), stampedData())
+        val stamped = stampedNotification(stampedData())
         val unstamped = ReminderNotification(emptyList(), unstampedData())
-        val stamped2 = ReminderNotification(emptyList(), stampedData())
+        val stamped2 = stampedNotification(stampedData())
 
         notifications.showNotification(stamped)
         notifications.showNotification(unstamped)
@@ -157,6 +190,67 @@ class NotificationsChokePointTest {
         verify(alarmRepo).publish(stamped.reminderNotificationData)
         verify(alarmRepo).publish(stamped2.reminderNotificationData)
         verify(alarmRepo, never()).publish(unstamped.reminderNotificationData)
+    }
+
+    @Test
+    fun serializedAlarmStamp_isReplacedByCurrentEffectiveSetting() {
+        val alarmRepo: AlarmScreenRepository = mock()
+        val notifManager: NotificationManager = mock()
+        val (notifications, _, _) = createNotifications(
+            alarmScreenRepository = alarmRepo,
+            notificationManager = notifManager
+        )
+        val data = stampedData()
+
+        notifications.showNotification(normalNotification(data))
+
+        assertFalse(data.showAsAlarm)
+        verify(alarmRepo, never()).publish(any())
+        verify(notifManager).notify(eq(100), any())
+    }
+
+    @Test
+    fun staleStampedPost_isCancelled_withoutUpdatingNotificationManager() {
+        val alarmRepo: AlarmScreenRepository = mock()
+        val notifManager: NotificationManager = mock()
+        val (notifications, _, _) = createNotifications(
+            alarmScreenRepository = alarmRepo,
+            notificationManager = notifManager
+        )
+        whenever(alarmRepo.publish(any())).thenReturn(false)
+
+        val data = stampedData()
+        notifications.showNotification(stampedNotification(data))
+
+        verify(alarmRepo).publish(data)
+        verify(notifManager).cancel(100)
+        verify(notifManager, never()).notify(any(), any())
+    }
+
+    @Test
+    fun staleExplicitNormalPost_isCancelledAfterNewerAlarmWins() {
+        val alarmRepo: AlarmScreenRepository = mock()
+        val notifManager: NotificationManager = mock()
+        val (notifications, _, _) = createNotifications(
+            alarmScreenRepository = alarmRepo,
+            notificationManager = notifManager
+        )
+        whenever(alarmRepo.currentAlarm).thenReturn(
+            MutableStateFlow(
+                ReminderNotificationData(
+                    remindInstant = Instant.now(),
+                    reminderIds = listOf(3),
+                    reminderEventIds = listOf(30),
+                    notificationId = 200,
+                    showAsAlarm = true
+                )
+            )
+        )
+
+        notifications.showNotification(normalNotification(unstampedData()), notificationId = 100)
+
+        verify(notifManager).cancel(100)
+        verify(notifManager, never()).notify(any(), any())
     }
 
     @Test
@@ -178,7 +272,7 @@ class NotificationsChokePointTest {
         val data = stampedData()
         // before post, notificationId is -1
         assert(data.notificationId == -1)
-        notifications.showNotification(ReminderNotification(emptyList(), data))
+        notifications.showNotification(stampedNotification(data))
         // after post, the same data object has been assigned the generated id
         verify(alarmRepo).publish(org.mockito.kotlin.check { publishped ->
             assert(publishped.notificationId == 77)

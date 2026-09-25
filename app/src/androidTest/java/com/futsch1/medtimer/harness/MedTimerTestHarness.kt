@@ -15,6 +15,7 @@ import androidx.test.uiautomator.UiSelector
 import com.adevinta.android.barista.rule.BaristaRule
 import com.futsch1.medtimer.MainActivity
 import com.futsch1.medtimer.MyFailureHandler
+import com.futsch1.medtimer.feature.reminders.ReminderProcessorBroadcastReceiver
 import com.futsch1.medtimer.feature.ui.overview.overviewEventListCacheWindowEnabled
 import com.futsch1.medtimer.feature.ui.overview.overviewEventListScrollToNowEnabled
 import com.futsch1.medtimer.utilities.grantAppPermission
@@ -29,7 +30,8 @@ import java.io.IOException
 /**
  * Everything a MedTimer instrumented test needs before its first interaction, as one rule with an
  * explicit order: name and failure capture, permissions, device state, and (for UI tests) the
- * activity/Compose rules. Tests that only drive an alarm activity can skip the UI launch.
+ * activity/Compose rules. Tests that only drive an alarm activity can skip the UI launch; their
+ * device preparation, notification cleanup, and test-state reset still run.
  */
 class MedTimerTestHarness(
     testClassName: String,
@@ -76,13 +78,17 @@ class MedTimerTestHarness(
     private val startApp = TestRule { base, _ ->
         object : Statement() {
             override fun evaluate() {
-                prepareDevice()
-                setFailureHandler(failureHandler)
-                failureHandler.resetCapture()
-                if (launchMainActivity) {
-                    baristaRule.launchActivity()
+                try {
+                    prepareDevice()
+                    setFailureHandler(failureHandler)
+                    failureHandler.resetCapture()
+                    if (launchMainActivity) {
+                        baristaRule.launchActivity()
+                    }
+                    base.evaluate()
+                } finally {
+                    ReminderProcessorBroadcastReceiver.resetTestScheduleState()
                 }
-                base.evaluate()
             }
         }
     }

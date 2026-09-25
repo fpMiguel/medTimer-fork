@@ -35,6 +35,7 @@ class ExpirationDateNotificationFactory @AssistedInject constructor(
     ) {
 
     init {
+        reminderNotification.reminderNotificationData.showAsAlarm = false
         val contentIntent = getStartAppIntent()
         val medicine = reminderNotification.reminderNotificationParts[0].medicine
 

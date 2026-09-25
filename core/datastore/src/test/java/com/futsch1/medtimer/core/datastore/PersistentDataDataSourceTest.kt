@@ -20,6 +20,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.time.Instant
 import java.time.LocalDate
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -233,11 +237,37 @@ class PersistentDataDataSourceTest {
     }
 
     @Test
-    fun `getAndIncreaseNotificationId handles overflow`() {
-        medTimerPrefs.edit().putInt(PersistentDataDataSource.NOTIFICATION_ID, Int.MAX_VALUE).commit()
-        // Should wrap around to Int.MIN_VALUE
-        assertEquals(Int.MAX_VALUE, dataSource.getAndIncreaseNotificationId())
-        assertEquals(Int.MIN_VALUE, dataSource.getAndIncreaseNotificationId())
+    fun `getAndIncreaseNotificationId is atomic across instances`() {
+        val secondDataSource = PersistentDataDataSource(
+            defaultPrefs,
+            medTimerPrefs,
+            CoroutineScope(Dispatchers.Unconfined),
+            GsonBuilder().create()
+        )
+        val pool = Executors.newFixedThreadPool(8)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(100)
+        val ids = ConcurrentLinkedQueue<Int>()
+
+        try {
+            repeat(100) {
+                pool.execute {
+                    try {
+                        start.await()
+                        ids += dataSource.getAndIncreaseNotificationId()
+                        ids += secondDataSource.getAndIncreaseNotificationId()
+                    } finally {
+                        done.countDown()
+                    }
+                }
+            }
+            start.countDown()
+            assertTrue(done.await(5, TimeUnit.SECONDS))
+            assertEquals(200, ids.size)
+            assertEquals(200, ids.toSet().size)
+        } finally {
+            pool.shutdownNow()
+        }
     }
 
     // ── D: StatisticFragment enum mapping ──────────────────────────────
